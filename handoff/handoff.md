@@ -2,14 +2,16 @@
 
 ## Current Session Status
 - **Phase**: Phase 1 Complete -> Transitioning to Phase 2 (AWS Environment Prerequisites).
-- **PoC Architecture**: Formulated and persisted in [poc_architecture.md](file:///Users/avikaushik/agentinfra/memories/poc_architecture.md). Documented Dual-LLM AI Gateway pattern (Google Gemini + AWS Bedrock).
+- **PoC Architecture**: Formulated and persisted in [poc_architecture.md](file:///Users/avikaushik/agentinfra/memories/poc_architecture.md). Added production readiness standards for frontend & backend data flow.
+- **Lifecycle Mode**: Ephemeral deployment strategy (spin-up at start of session, complete tear-down at end of session).
 
 ## Accomplishments
-1. Integrated Dual-LLM AI Gateway pattern into architecture: Kong AI Gateway / LiteLLM Proxy acting as a unified, OpenAI-compatible proxy for both Google Gemini 2.0 Flash and AWS Bedrock (Nova/Claude).
-2. Documented AI Gateway capabilities: Automatic model failover (Bedrock ↔ Gemini), semantic prompt caching (Redis), centralized Vault secrets resolution, and unified token rate-limiting.
-3. Updated system invariants, semantics, and implementation plan for SOLID AI architecture, LangGraph statefulness, React CopilotKit frontend, Kong firewall, and HashiCorp Vault.
+1. Established **Ephemeral Session Lifecycle** invariant to maximize AWS credit runway.
+2. Formulated AWS Bedrock invocation strategy: Direct Pod-to-Bedrock via IAM Roles for Service Accounts (IRSA) for maximum security (zero static API keys) and lowest latency, wrapped in SOLID `ILLMProviderAdapter`.
+3. Defined production readiness standards for frontend (React/CopilotKit) and backend (Kong/Vault/LangGraph/K8s) when handling live production data.
+4. Created comprehensive [poc_architecture.md](file:///Users/avikaushik/agentinfra/memories/poc_architecture.md) detailing architecture diagram, SOLID principles mapping, and security/governance standards.
 
 ## Next Steps
-1. User provides AWS configuration preferences (AWS Region, IAM access approach, choice of Managed EKS vs k3s on EC2).
+1. User provides AWS configuration preferences (AWS Region, IAM access keys).
 2. Install / verify local tooling (`aws-cli`, `kubectl`, `helm`, `docker`).
-3. Begin Phase 2: Compute & Security base setup on AWS.
+3. Begin Phase 2: Create Terraform scripts for EKS + VPC and the automated `make bootstrap`/`make teardown` helper commands.

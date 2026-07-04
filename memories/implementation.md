@@ -9,7 +9,7 @@
  [ Kong Gateway / Firewall ] (Auth, Rate Limiting, WAF)
             │
             ▼
- [ Kubernetes Layer (EKS / k3s) ]
+ [ Kubernetes Layer (Managed EKS) ]
  ├── [ HashiCorp Vault ] (Secrets Manager)
  └── [ LangGraph Agent Core ] (Stateful Agent Graph + Checkpointer)
             │
@@ -22,6 +22,11 @@
 ## Detailed Document Reference
 See full design spec in [poc_architecture.md](file:///Users/avikaushik/agentinfra/memories/poc_architecture.md).
 
+## Infrastructure Execution Mode: Ephemeral Sessions
+To protect credit resources, we deploy our infrastructure as an ephemeral environment:
+- **`make bootstrap`**: Deploys VPC, EKS Cluster, Kong, Vault, Postgres, and LangGraph Core.
+- **`make teardown`**: Destroys all AWS resources completely.
+
 ## Phase Breakdown
 
 - **Phase 1: Architecture, SOLID & Governance (Completed)**
@@ -31,10 +36,11 @@ See full design spec in [poc_architecture.md](file:///Users/avikaushik/agentinfr
 - **Phase 2: AWS Account & Environment Prerequisites (Next)**
   - AWS CLI configuration & credential setup.
   - Region selection, IAM User/Role permissions, VPC/Subnet strategy.
-  - Option selection: Managed EKS vs k3s on EC2 for budget optimization.
+  - Write Terraform scripts for the EKS Cluster and VPC setup.
+  - Create automation scripts (`Makefile`) to bootstrap and teardown in a single step.
 
 - **Phase 3: Core Security & Secrets Setup**
-  - HashiCorp Vault deployment (Vault Helm chart or local container).
+  - HashiCorp Vault deployment (Vault Helm chart).
   - Kong Gateway installation with rate-limiting & JWT auth plugins.
 
 - **Phase 4: LangGraph Agent Core & SOLID Adapter**
@@ -43,7 +49,3 @@ See full design spec in [poc_architecture.md](file:///Users/avikaushik/agentinfr
 
 - **Phase 5: React + CopilotKit UI Integration**
   - Lightweight React application with CopilotKit hooks talking to Kong Gateway.
-
-## Financial Strategy ($160-$180 Credits)
-- **k3s on EC2 (Recommended)**: ~$15–$25/month -> 6-8 months runway.
-- **Managed EKS**: ~$73/month control plane + EC2 nodes -> ~2 months runway.
