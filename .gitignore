@@ -1,0 +1,28 @@
+# Local AWS and Kubernetes credentials
+.aws/
+.kube/
+.env
+
+# Terraform State and local plugins
+.terraform/
+*.tfstate
+*.tfstate.backup
+.terraform.lock.hcl
+
+# Node dependencies and build files
+node_modules/
+dist/
+build/
+.next/
+out/
+
+# Python virtual environment and cache
+venv/
+.venv/
+__pycache__/
+*.pyc
+
+# Local IDE files
+.idea/
+.vscode/
+.DS_Store
