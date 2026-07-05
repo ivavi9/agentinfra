@@ -62,14 +62,23 @@ graph TB
     
     KongAI -->|Translates & routes| NovaLite
     
-    style AWS fill:#1e1e2f,stroke:#4f46e5,stroke-width:2px;
-    style IngressLayer fill:#0f172a,stroke:#3b82f6,stroke-width:1px;
-    style AgentPod fill:#0f172a,stroke:#8b5cf6,stroke-width:1px;
-    style Specialists fill:#1e1b4b,stroke:#a78bfa,stroke-width:1px;
-    style Bedrock fill:#1c1917,stroke:#e7e5e4,stroke-width:1px;
-    style Kong fill:#ef4444,stroke:#f87171,stroke-width:1px;
-    style Vault fill:#f59e0b,stroke:#fbbf24,stroke-width:1px;
-    style ViteUI fill:#06b6d4,stroke:#22d3ee,stroke-width:1px;
+    style AWS fill:none,stroke:#4f46e5,stroke-width:2px,stroke-dasharray: 5 5;
+    style IngressLayer fill:none,stroke:#3b82f6,stroke-width:1.5px;
+    style AgentPod fill:none,stroke:#8b5cf6,stroke-width:1.5px;
+    style Specialists fill:none,stroke:#a78bfa,stroke-width:1.5px;
+    style Bedrock fill:none,stroke:#475569,stroke-width:2px,stroke-dasharray: 5 5;
+    
+    style Kong fill:#fee2e2,stroke:#ef4444,stroke-width:1.5px,color:#991b1b;
+    style KongAI fill:#e0f2fe,stroke:#0284c7,stroke-width:1.5px,color:#0369a1;
+    style Vault fill:#fef3c7,stroke:#d97706,stroke-width:1.5px,color:#92400e;
+    style ViteUI fill:#ecfeff,stroke:#0891b2,stroke-width:1.5px,color:#155e75;
+    style FastAPI fill:#f5f3ff,stroke:#7c3aed,stroke-width:1.5px,color:#5b21b6;
+    style Supervisor fill:#faf5ff,stroke:#8b5cf6,stroke-width:1.5px,color:#6d28d9;
+    style InfraAgent fill:#f0fdf4,stroke:#16a34a,stroke-width:1px,color:#166534;
+    style CodeAgent fill:#f0fdfa,stroke:#0d9488,stroke-width:1px,color:#115e59;
+    style ResearchAgent fill:#fdf2f8,stroke:#db2777,stroke-width:1px,color:#9d174d;
+    style NovaLite fill:#f8fafc,stroke:#475569,stroke-width:1.5px,color:#1e293b;
+    style Developer fill:#f8fafc,stroke:#475569,stroke-width:1.5px,color:#1e293b;
 ```
 
 ---
