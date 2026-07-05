@@ -77,7 +77,7 @@ write-secret: config-check
 		"VAULT_TOKEN=root-vault-token vault kv put secret/gemini api_key=$$key"; \
 	echo "==> Generating Kong AI Gateway secret config..."; \
 	KUBECONFIG=$(KUBECONFIG_PATH) $(KUBECTL) create secret generic gemini-ai-proxy-config \
-		--from-literal=config="{\"route_type\": \"llm/v1/chat\", \"auth\": {\"allow_override\": false, \"header_name\": \"Authorization\", \"header_value\": \"Bearer $$key\"}, \"model\": {\"provider\": \"gemini\", \"name\": \"gemini-2.0-flash\"}}" \
+		--from-literal=config="{\"route_type\": \"llm/v1/chat\", \"auth\": {\"allow_override\": false, \"header_name\": \"x-goog-api-key\", \"header_value\": \"$$key\"}, \"model\": {\"provider\": \"gemini\", \"name\": \"gemini-2.0-flash\"}}" \
 		--dry-run=client -o yaml | KUBECONFIG=$(KUBECONFIG_PATH) $(KUBECTL) apply -f -
 
 # ECR URL target (resolves from outputs or default)
