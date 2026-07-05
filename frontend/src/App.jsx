@@ -337,7 +337,18 @@ function DashboardContent() {
 
 function App() {
   return (
-    <CopilotKit runtimeUrl={`${GATEWAY_URL}/v1/copilotkit`}>
+    <CopilotKit 
+      runtimeUrl={`${GATEWAY_URL}/v1/copilotkit`}
+      agents__unsafe_dev_only={{
+        default: {
+          subscribe: () => ({ unsubscribe: () => {} }),
+          messages: [],
+          setState: () => {},
+          isRunning: false,
+          state: {}
+        }
+      }}
+    >
       <DashboardContent />
     </CopilotKit>
   )
