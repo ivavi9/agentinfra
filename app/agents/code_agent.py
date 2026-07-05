@@ -14,9 +14,13 @@ logger = logging.getLogger("code_agent")
 # ── Tools scoped to code / capability domain ─────────────────────────────────
 
 @tool
-def get_agent_capabilities() -> str:
+def get_agent_capabilities(query: str = "") -> str:
     """Returns a structured manifest of this agent's architecture,
-    registered specialist agents, and their tool sets."""
+    registered specialist agents, and their tool sets.
+    
+    Args:
+        query: Optional filter query.
+    """
     capabilities = {
         "architecture": "LangGraph Multi-Agent Supervisor",
         "specialists": [

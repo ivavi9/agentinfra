@@ -16,9 +16,13 @@ logger = logging.getLogger("infra_agent")
 # ── Tools scoped to infrastructure domain ────────────────────────────────────
 
 @tool
-def get_infrastructure_status() -> str:
+def get_infrastructure_status(query: str = "") -> str:
     """Returns the current EKS cluster name, region, Vault address,
-    Kong gateway URL, and the AI model currently serving requests."""
+    Kong gateway URL, and the AI model currently serving requests.
+    
+    Args:
+        query: Optional filter query.
+    """
     status = {
         "cluster": os.getenv("CLUSTER_NAME", "agent-infra-cluster"),
         "region": os.getenv("AWS_REGION", "us-east-1"),
