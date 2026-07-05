@@ -1,17 +1,15 @@
-# Placeholder service pointing to Google's API server with path rewrite annotation
+# Placeholder service required by Kubernetes Ingress schema
 apiVersion: v1
 kind: Service
 metadata:
   name: ai-gateway-placeholder
   namespace: default
-  annotations:
-    konghq.com/path: /v1beta/openai # Direct upstream path override
 spec:
   type: ExternalName
-  externalName: "generativelanguage.googleapis.com"
+  externalName: "bedrock-runtime.us-east-1.amazonaws.com"
 
 ---
-# KongPlugin using provider: openai to proxy payload directly and bypass gemini provider model validation lists
+# KongPlugin using provider: bedrock to proxy payload keylessly to AWS Bedrock
 apiVersion: configuration.konghq.com/v1
 kind: KongPlugin
 metadata:
@@ -24,7 +22,7 @@ configFrom:
     key: config
 
 ---
-# Ingress routing /v1 requests to Google's API through Kong and the AI Proxy plugin
+# Ingress routing /v1 requests to Bedrock via Kong and the AI Proxy plugin
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
