@@ -5,6 +5,10 @@ REGION=us-east-1
 CLUSTER_NAME=agent-infra-cluster
 KUBECONFIG_PATH=$(shell pwd)/.kube/config
 
+# Vault dev-mode root token — override via: make deploy-security VAULT_DEV_TOKEN=mytoken
+# This is a dev-only bootstrap token; it has no value outside the ephemeral cluster.
+VAULT_DEV_TOKEN ?= root-vault-token
+
 # Executables
 AWS_CLI=/opt/homebrew/bin/aws
 TERRAFORM=/opt/homebrew/bin/terraform
@@ -63,7 +67,7 @@ deploy-security: config-check
 	KUBECONFIG=$(KUBECONFIG_PATH) $(KUBECTL) wait --for=condition=Ready pod/vault-0 --timeout=120s
 	@echo "==> Bootstrapping Vault KV engine..."
 	KUBECONFIG=$(KUBECONFIG_PATH) $(KUBECTL) exec -it vault-0 -- sh -c \
-		"VAULT_TOKEN=root-vault-token vault secrets enable -path=secret kv-v2" || true
+		"VAULT_TOKEN=$(VAULT_DEV_TOKEN) vault secrets enable -path=secret kv-v2" || true
 	@echo "==> Security layer deployed successfully!"
 	@echo "==> Run 'make write-secret' next to write your Gemini API key securely."
 
@@ -76,7 +80,7 @@ write-secret: config-check
 	fi; \
 	echo "==> Writing key to Vault kv/data/secret/gemini..."; \
 	KUBECONFIG=$(KUBECONFIG_PATH) $(KUBECTL) exec -i vault-0 -- sh -c \
-		"VAULT_TOKEN=root-vault-token vault kv put secret/gemini api_key=$$key"; \
+		"VAULT_TOKEN=$(VAULT_DEV_TOKEN) vault kv put secret/gemini api_key=$$key"; \
 	echo "==> Generating Kong AI Gateway secret config..."; \
 	KUBECONFIG=$(KUBECONFIG_PATH) $(KUBECTL) create secret generic gemini-ai-proxy-config \
 		--from-literal=config="{\"route_type\": \"llm/v1/chat\", \"auth\": {\"allow_override\": false, \"header_name\": \"Authorization\", \"header_value\": \"Bearer $$key\"}, \"model\": {\"provider\": \"openai\", \"name\": \"gemini-2.5-flash\", \"options\": {\"upstream_url\": \"https://generativelanguage.googleapis.com/v1beta/openai\"}}}" \
@@ -88,16 +92,16 @@ ECR_URL=818593257879.dkr.ecr.us-east-1.amazonaws.com/agent-core
 configure-vault-auth: config-check
 	@echo "==> Enabling Kubernetes authentication in Vault..."
 	KUBECONFIG=$(KUBECONFIG_PATH) $(KUBECTL) exec -it vault-0 -- sh -c \
-		"VAULT_TOKEN=root-vault-token vault auth enable kubernetes" || true
+		"VAULT_TOKEN=$(VAULT_DEV_TOKEN) vault auth enable kubernetes" || true
 	@echo "==> Configuring Kubernetes API host mapping in Vault..."
 	KUBECONFIG=$(KUBECONFIG_PATH) $(KUBECTL) exec -it vault-0 -- sh -c \
-		"VAULT_TOKEN=root-vault-token vault write auth/kubernetes/config kubernetes_host=\"https://kubernetes.default.svc.cluster.local:443\""
+		"VAULT_TOKEN=$(VAULT_DEV_TOKEN) vault write auth/kubernetes/config kubernetes_host=\"https://kubernetes.default.svc.cluster.local:443\""
 	@echo "==> Creating Vault read-only policy for Gemini secrets..."
 	KUBECONFIG=$(KUBECONFIG_PATH) $(KUBECTL) exec -i vault-0 -- sh -c \
-		"echo 'path \"secret/data/gemini\" { capabilities = [\"read\"] }' | VAULT_TOKEN=root-vault-token vault policy write agent-policy -"
+		"echo 'path \"secret/data/gemini\" { capabilities = [\"read\"] }' | VAULT_TOKEN=$(VAULT_DEV_TOKEN) vault policy write agent-policy -"
 	@echo "==> Registering Vault authorization role for agent ServiceAccount..."
 	KUBECONFIG=$(KUBECONFIG_PATH) $(KUBECTL) exec -it vault-0 -- sh -c \
-		"VAULT_TOKEN=root-vault-token vault write auth/kubernetes/role/agent-role bound_service_account_names=agent-core-sa bound_service_account_namespaces=default policies=agent-policy ttl=24h"
+		"VAULT_TOKEN=$(VAULT_DEV_TOKEN) vault write auth/kubernetes/role/agent-role bound_service_account_names=agent-core-sa bound_service_account_namespaces=default policies=agent-policy ttl=24h"
 
 configure-bedrock-auth: config-check
 	@echo "==> Fetching Bedrock credentials from Terraform..."

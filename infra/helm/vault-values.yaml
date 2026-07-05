@@ -1,0 +1,11 @@
+server:
+  dev:
+    enabled: true
+    # Dev-mode root token. Overridden at bootstrap time via VAULT_DEV_TOKEN make variable.
+    # Default value is intentionally generic — has zero value outside this ephemeral cluster.
+    devRootToken: "root-vault-token"
+
+  # Enable the Vault web UI
+  ui:
+    enabled: true
+    serviceType: "ClusterIP"
