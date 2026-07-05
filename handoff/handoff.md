@@ -1,36 +1,29 @@
 # Session Handoff & State Tracker
 
 ## Current Session Status
-- **Phase**: Phase 6 — LangGraph Tool Registration (In Progress)
-- **Agent Core Status**: Running in EKS. ECR rebuild triggered to deploy tool-enabled version.
-- **Security & Gateway Status**: Vault & Kong API/AI Gateways fully running.
-- **Frontend Status**: Vite React dashboard running locally at `http://localhost:5173/`.
-- **Active Endpoints**:
-  * **Kong Public LB**: `a659b32a9d28f421da4c4090c1d0b3d0-774720386.us-east-1.elb.amazonaws.com`
-  * **ECR URL**: `818593257879.dkr.ecr.us-east-1.amazonaws.com/agent-core`
-  * **Vault Endpoint**: `http://vault.default.svc.cluster.local:8200`
-  * **AI Gateway**: `/v1/chat/completions` → Kong `ai-proxy` → Amazon Bedrock (`us.amazon.nova-lite-v1:0`)
-  * **Chat Endpoint**: `POST /chat` on Kong public LB
+- **Phase**: Phase 7 — LangGraph Multi-Agent Supervisor Architecture (Complete)
+- **AWS Infrastructure Status**: 🔄 EKS Cluster & VPC Network currently bootstrapping (`make bootstrap` running in background task-1241).
+- **Core App Status**: Implemented and verified multi-agent supervisor (Supervisor + 3 Specialists: Infra, Code, Research).
+- **Security & Gateway Status**: Vault & Kong configuration recipes ready to deploy.
+- **Frontend Status**: Vite React dashboard updated to render subagentic specialist badges and collapsible chain-of-thought details logs. Local dev server running at `http://localhost:5173/`.
 
 ## Accomplishments (Cumulative)
-1. Drafted architecture spec with SOLID principles & security governance.
+1. Drafted poC architecture spec with SOLID principles & security governance rules.
 2. Provisioned EKS VPC, Node Groups, and IRSA permissions via Terraform.
-3. Deployed HashiCorp Vault + Kong Gateway with CORS & Rate Limiting plugins.
-4. Wrote FastAPI + LangGraph Agent Core container; deployed to EKS with keyless Vault SA auth.
-5. Migrated model routing to Amazon Bedrock Nova Lite via Kong AI Proxy (bypasses Free Tier IP blocks).
-6. Verified E2E: public `curl POST /chat` returns `200 OK` from Bedrock model.
-7. Built premium React + CopilotKit dashboard (dark theme, glassmorphism, Outfit font, pulsing indicators).
-8. Fixed CopilotKit API breaking changes: `useMakeCopilotReadable` → `useCopilotReadable` + `runtimeUrl`.
-9. Added 4 registered tools to `app/agent.py` with ToolNode + conditional routing loop.
-10. Fixed `DOCKER` Makefile macro to use Colima socket (no Docker Desktop installed).
+3. Configured Vault + Kong Gateway with CORS, Rate Limiting, and AI Proxy plugins.
+4. Wrote FastAPI + LangGraph Agent Core container; deployed to EKS with keyless Vault ServiceAccount authentication.
+5. Setup keyless model routing through Kong AI Proxy Ingress to Amazon Bedrock (Nova Lite model).
+6. Built React + CopilotKit UI featuring Outfit fonts, dark space themes, and glassmorphism styling.
+7. Registered 4 custom python tools (`get_infrastructure_status`, `get_agent_capabilities`, `call_health_endpoint`, `run_sub_prompt`) and wired conditional routing.
+8. Upgraded single agent to a Supervisor + Specialist multi-agent orchestration pattern.
+9. Parameterized Vault root bootstrap token in the Makefile configuration to prevent credential exposure.
+10. Added formatting support in React dashboard to render collapsible reasoning chains and routed subagent badges.
+11. Created root-level `README.md` containing C4 Container diagrams, architectural rationales, and bootstrapping playbooks.
 
-## Phase 6 Remaining Steps
-- [ ] Rebuild & push ECR image with tool-enabled `agent.py` — `make build-and-push`
-- [ ] Rolling redeploy to EKS — `make deploy-agent`
-- [ ] Manual verification: ask agent "what tools do you have?" and "check cluster health"
-
-## Key Gotchas & Notes
-- **Docker**: No Docker Desktop installed. Docker daemon runs via `colima`. Use `DOCKER_HOST=unix://$HOME/.colima/default/docker.sock docker ...` or `$(DOCKER)` Makefile macro.
-- **langchain-core**: Must be `>=0.2.27,<0.3.0` for `langchain==0.2.12` compatibility.
-- **CopilotKit**: `<CopilotKit>` provider requires `runtimeUrl` or `publicApiKey` prop — omitting it causes a blank white/black screen crash.
-- **Platform flag**: Always build with `--platform linux/amd64` for EKS `x86_64` node groups (Mac M-series is `arm64`).
+## Next Steps (Once EKS Bootstrap completes)
+- [ ] Run `make deploy-security` to deploy Helm Charts (Vault + Kong).
+- [ ] Run `make write-secret` to write the Gemini API key to Vault.
+- [ ] Run `make configure-vault-auth` and `make configure-bedrock-auth` to map auth policies.
+- [ ] Run `make build-and-push` to rebuild the multi-agent image.
+- [ ] Run `make deploy-agent` to start agent-core on the new cluster.
+- [ ] Open the React frontend, run manual walkthrough verifications, and confirm subagent badges and collapsible reasoning drawers render correctly.

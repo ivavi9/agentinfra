@@ -94,10 +94,10 @@ class SupervisorAgent:
         logger.warning(f"Could not classify intent, falling back to RESEARCH. Decision: {decision!r}")
         return "RESEARCH"
 
-    def run(self, user_prompt: str, history: List[BaseMessage] = None) -> str:
+    def run(self, user_prompt: str, history: List[BaseMessage] = None) -> tuple:
         """
         Routes the user prompt to the correct specialist agent and returns
-        the synthesized text response.
+        a tuple: (synthesized text response, specialist_key).
         """
         messages = list(history or [])
         messages.append(HumanMessage(content=user_prompt))
@@ -105,8 +105,9 @@ class SupervisorAgent:
         specialist_key = self._route(user_prompt)
 
         if specialist_key == "INFRA":
-            return self.infra_agent.run(messages)
+            response = self.infra_agent.run(messages)
         elif specialist_key == "CODE":
-            return self.code_agent.run(messages)
+            response = self.code_agent.run(messages)
         else:
-            return self.research_agent.run(messages)
+            response = self.research_agent.run(messages)
+        return response, specialist_key

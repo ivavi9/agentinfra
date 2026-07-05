@@ -5,6 +5,58 @@ import './App.css'
 // Define the public Kong LoadBalancer gateway URL
 const GATEWAY_URL = 'http://a659b32a9d28f421da4c4090c1d0b3d0-774720386.us-east-1.elb.amazonaws.com'
 
+// Helper to render thinking blocks and markdown/clean content
+const renderMessageContent = (content) => {
+  if (!content) return null;
+  const thinkingRegex = /<thinking>([\s\S]*?)<\/thinking>/;
+  const match = content.match(thinkingRegex);
+  if (match) {
+    const thinkingText = match[1].trim();
+    const cleanContent = content.replace(thinkingRegex, '').trim();
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+        <details className="thinking-details" style={{
+          background: 'rgba(0, 0, 0, 0.25)',
+          border: '1px solid rgba(124, 90, 237, 0.2)',
+          borderRadius: '8px',
+          padding: '10px 14px',
+          transition: 'border-color 0.2s'
+        }}>
+          <summary className="thinking-summary" style={{
+            fontSize: '0.82rem',
+            color: 'var(--text-secondary)',
+            cursor: 'pointer',
+            fontWeight: '600',
+            userSelect: 'none',
+            outline: 'none',
+            display: 'list-item'
+          }}>
+            🧠 Agent Reasoning Process
+          </summary>
+          <div className="thinking-content" style={{
+            marginTop: '10px',
+            fontSize: '0.85rem',
+            color: 'rgba(243, 244, 246, 0.75)',
+            fontFamily: 'var(--font-mono)',
+            whiteSpace: 'pre-wrap',
+            lineHeight: '1.4',
+            borderLeft: '2px solid var(--accent-purple)',
+            paddingLeft: '12px'
+          }}>
+            {thinkingText}
+          </div>
+        </details>
+        {cleanContent && (
+          <div style={{ fontSize: '0.95rem', lineHeight: '1.5', whiteSpace: 'pre-wrap' }}>
+            {cleanContent}
+          </div>
+        )}
+      </div>
+    );
+  }
+  return <div style={{ fontSize: '0.95rem', lineHeight: '1.5', whiteSpace: 'pre-wrap' }}>{content}</div>;
+};
+
 function DashboardContent() {
   const [messages, setMessages] = useState([
     {
@@ -56,7 +108,14 @@ function DashboardContent() {
       }
 
       const data = await response.json()
-      setMessages((prev) => [...prev, { role: 'assistant', content: data.response }])
+      setMessages((prev) => [
+        ...prev, 
+        { 
+          role: 'assistant', 
+          content: data.response, 
+          specialist: data.specialist 
+        }
+      ])
     } catch (err) {
       console.error('Fetch error:', err)
       setMessages((prev) => [
@@ -221,12 +280,21 @@ function DashboardContent() {
                 }`}
                 style={{ alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start', maxWidth: '75%' }}
               >
-                <div style={{ fontWeight: '600', fontSize: '0.8rem', marginBottom: '6px', color: msg.role === 'user' ? 'var(--accent-purple-light)' : 'var(--accent-cyan)' }}>
-                  {msg.role === 'user' ? 'DEVELOPER' : 'CO-ASSISTANT'}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'space-between', fontWeight: '600', fontSize: '0.8rem', marginBottom: '6px', color: msg.role === 'user' ? 'var(--accent-purple-light)' : 'var(--accent-cyan)' }}>
+                  <span>{msg.role === 'user' ? 'DEVELOPER' : 'CO-ASSISTANT'}</span>
+                  {msg.specialist && (
+                    <span className="badge badge-purple" style={{ fontSize: '0.65rem', padding: '2px 6px', textTransform: 'uppercase' }}>
+                      ⚙️ {msg.specialist} Specialist
+                    </span>
+                  )}
                 </div>
-                <div style={{ fontSize: '0.95rem', lineHeight: '1.5', whiteSpace: 'pre-wrap' }}>
-                  {msg.content}
-                </div>
+                {msg.role === 'user' ? (
+                  <div style={{ fontSize: '0.95rem', lineHeight: '1.5', whiteSpace: 'pre-wrap' }}>
+                    {msg.content}
+                  </div>
+                ) : (
+                  renderMessageContent(msg.content)
+                )}
               </div>
             ))}
             

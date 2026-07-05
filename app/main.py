@@ -21,6 +21,7 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     response: str
+    specialist: Optional[str] = None
 
 @app.on_event("startup")
 async def startup_event():
@@ -52,8 +53,8 @@ async def chat_endpoint(request: ChatRequest):
     
     try:
         logger.info(f"Received prompt: '{request.prompt[:30]}...'")
-        response_text = agent_orchestrator.run(user_prompt=request.prompt)
-        return ChatResponse(response=response_text)
+        response_text, specialist_key = agent_orchestrator.run(user_prompt=request.prompt)
+        return ChatResponse(response=response_text, specialist=specialist_key)
     except Exception as e:
         logger.error(f"Error during agent runtime execution: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Agent Error: {str(e)}")

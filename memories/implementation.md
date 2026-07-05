@@ -57,9 +57,17 @@ To protect credit resources, we deploy our infrastructure as an ephemeral enviro
   - Added `runtimeUrl` prop to `<CopilotKit>` provider to fix black-screen crash.
   - Vite production build verified successfully (9138 modules transformed).
 
-- **Phase 6: LangGraph Tool Registration (In Progress)**
+- **Phase 6: LangGraph Tool Registration (Completed)**
   - Registered 4 tools in `app/agent.py`: `get_infrastructure_status`, `get_agent_capabilities`, `call_health_endpoint`, `run_sub_prompt`.
   - Switched from single-node graph to ToolNode + conditional routing loop (agent → tools → agent).
   - Added `langchain==0.2.12` to `requirements.txt`; fixed `langchain-core` pin to `>=0.2.27,<0.3.0`.
   - Added `DOCKER` Makefile macro pointing to Colima socket (`~/.colima/default/docker.sock`) since Docker Desktop is not installed.
-  - ECR rebuild in progress.
+  - Rebuilt and deployed agent image to ECR.
+
+- **Phase 7: LangGraph Multi-Agent Supervisor Architecture (Completed)**
+  - Deployed `SupervisorAgent` routing node mapping incoming developer intents dynamically to specialist subagents.
+  - Implemented 3 state-graph specialist nodes: `InfraAgent` (diagnostics & health), `CodeAgent` (capabilities manifest & sub-prompting), and `ResearchAgent` (concepts & explanations).
+  - Wrapped tool responses in valid JSON to ensure compatibility with Kong Gateway `ai-proxy` parser.
+  - Updated React UI with live reasoning details drop-down and active specialist routing badges.
+  - Formulated C4 system containers and detailed setup playbooks in the root `README.md`.
+
