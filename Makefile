@@ -10,6 +10,7 @@ AWS_CLI=/opt/homebrew/bin/aws
 TERRAFORM=/opt/homebrew/bin/terraform
 KUBECTL=/opt/homebrew/bin/kubectl
 HELM=/opt/homebrew/bin/helm
+DOCKER=DOCKER_HOST=unix://$(HOME)/.colima/default/docker.sock /opt/homebrew/bin/docker
 
 .PHONY: help bootstrap deploy-security write-secret configure-vault-auth configure-bedrock-auth build-and-push deploy-agent teardown config-check clean
 
@@ -113,11 +114,11 @@ configure-bedrock-auth: config-check
 
 build-and-push: config-check
 	@echo "==> Logging in to AWS ECR..."
-	$(AWS_CLI) ecr get-login-password --region $(REGION) --profile $(PROFILE) | docker login --username AWS --password-stdin $(ECR_URL)
+	$(AWS_CLI) ecr get-login-password --region $(REGION) --profile $(PROFILE) | $(DOCKER) login --username AWS --password-stdin $(ECR_URL)
 	@echo "==> Building agent core Docker container image..."
-	docker build --pull --no-cache --platform linux/amd64 -t $(ECR_URL):latest ./app
+	$(DOCKER) build --pull --no-cache --platform linux/amd64 -t $(ECR_URL):latest ./app
 	@echo "==> Pushing image to private ECR repository..."
-	docker push $(ECR_URL):latest
+	$(DOCKER) push $(ECR_URL):latest
 
 deploy-agent: config-check
 	@echo "==> Deploying agent ServiceAccount and permissions..."
