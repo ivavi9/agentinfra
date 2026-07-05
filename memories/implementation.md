@@ -14,7 +14,7 @@
  └── [ LangGraph Agent Core ] (Stateful Agent Graph + Checkpointer)
             │
             ▼
- [ SOLID LLM Adapter ]
+ [ Kong AI Gateway Proxy ]
  ├── [ Google Gemini API ] (Gemini 2.0 Flash)
  └── [ AWS Bedrock ] (Nova / Claude)
 ```
@@ -33,19 +33,22 @@ To protect credit resources, we deploy our infrastructure as an ephemeral enviro
   - Drafted [poc_architecture.md](file:///Users/avikaushik/agentinfra/memories/poc_architecture.md) with SOLID principles & security governance.
   - Set up statefulness directory (`memories/` & `handoff/`).
 
-- **Phase 2: AWS Account & Environment Prerequisites (Next)**
-  - AWS CLI configuration & credential setup.
-  - Region selection, IAM User/Role permissions, VPC/Subnet strategy.
-  - Write Terraform scripts for the EKS Cluster and VPC setup.
-  - Create automation scripts (`Makefile`) to bootstrap and teardown in a single step.
+- **Phase 2: AWS Account & Environment Prerequisites (Completed)**
+  - Configured EKS & VPC network via Terraform.
+  - Verified local kubectl connections and credentials.
 
-- **Phase 3: Core Security & Secrets Setup**
-  - HashiCorp Vault deployment (Vault Helm chart).
-  - Kong Gateway installation with rate-limiting & JWT auth plugins.
+- **Phase 3: Core Security & Secrets Setup (Completed)**
+  - Deployed HashiCorp Vault and Kong Gateway Ingress.
+  - Setup CORS & Rate-Limiting plugin firewalls.
+  - Authenticated and cached Gemini keys in Vault kv engine.
 
-- **Phase 4: LangGraph Agent Core & SOLID Adapter**
-  - Develop Python/TypeScript LangGraph agent with state checkpointer.
-  - Implement `ILLMProviderAdapter` for Google Gemini 2.0 Flash & AWS Bedrock.
+- **Phase 4: LangGraph Agent Core Deployment (Completed)**
+  - Wrote FastAPI + LangGraph Agent container.
+  - Configured Vault Kubernetes authentication (keyless SA auth).
+  - Built and pushed platform-specific image (`linux/amd64`) to AWS ECR.
+  - Deployed Agent Core pod to EKS and validated health check connections.
+  - Configured Kong AI Ingress mapping OpenAI format to Gemini.
 
-- **Phase 5: React + CopilotKit UI Integration**
-  - Lightweight React application with CopilotKit hooks talking to Kong Gateway.
+- **Phase 5: React + CopilotKit UI Integration (Next)**
+  - Create a lightweight React application using CopilotKit.
+  - Configure frontend to connect to Kong Gateway's public IP address.
