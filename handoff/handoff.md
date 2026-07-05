@@ -1,17 +1,17 @@
 # Session Handoff & State Tracker
 
 ## Current Session Status
-- **Phase**: Phase 1 Complete -> Transitioning to Phase 2 (AWS Environment Prerequisites).
-- **PoC Architecture**: Formulated and persisted in [poc_architecture.md](file:///Users/avikaushik/agentinfra/memories/poc_architecture.md). Added production readiness standards for frontend & backend data flow.
-- **Lifecycle Mode**: Ephemeral deployment strategy (spin-up at start of session, complete tear-down at end of session).
+- **Phase**: Phase 2 Complete -> Transitioning to Phase 3 (Core Security & Secrets Setup).
+- **Infrastructure Status**: EKS and VPC Terraform scripts fully created, validated, and version controlled.
+- **Automation Status**: `Makefile` setup for ephemeral EKS session commands (`make bootstrap` / `make teardown`).
 
 ## Accomplishments
-1. Established **Ephemeral Session Lifecycle** invariant to maximize AWS credit runway.
-2. Formulated AWS Bedrock invocation strategy: Direct Pod-to-Bedrock via IAM Roles for Service Accounts (IRSA) for maximum security (zero static API keys) and lowest latency, wrapped in SOLID `ILLMProviderAdapter`.
-3. Defined production readiness standards for frontend (React/CopilotKit) and backend (Kong/Vault/LangGraph/K8s) when handling live production data.
-4. Created comprehensive [poc_architecture.md](file:///Users/avikaushik/agentinfra/memories/poc_architecture.md) detailing architecture diagram, SOLID principles mapping, and security/governance standards.
+1. Provisioned full Terraform codebase inside `infra/terraform/` for VPC setup and managed EKS provisioning with OIDC integration.
+2. Created a root `Makefile` that binds AWS SSO Profile (`agent-dev`), runs Terraform, and automatically scopes `kubeconfig` locally to `./.kube/config`.
+3. Ran offline validation (`terraform validate`) verifying all configurations are syntactically correct and ready to apply.
+4. Committed all code to local Git repository.
 
 ## Next Steps
-1. User provides AWS configuration preferences (AWS Region, IAM access keys).
-2. Install / verify local tooling (`aws-cli`, `kubectl`, `helm`, `docker`).
-3. Begin Phase 2: Create Terraform scripts for EKS + VPC and the automated `make bootstrap`/`make teardown` helper commands.
+1. User runs `make bootstrap` to spin up the actual cluster on AWS (first real test).
+2. Begin Phase 3: Setup local Helm configurations for Kong API Gateway and HashiCorp Vault.
+3. Configure Vault policy templates inside `memories/skills/` for secrets integration.
