@@ -47,8 +47,11 @@ To protect credit resources, we deploy our infrastructure as an ephemeral enviro
   - Configured Vault Kubernetes authentication (keyless SA auth).
   - Built and pushed platform-specific image (`linux/amd64`) to AWS ECR.
   - Deployed Agent Core pod to EKS and validated health check connections.
-  - Configured Kong AI Ingress mapping OpenAI format to Gemini.
+  - Set up Kong AI Ingress mapping OpenAI format to model backend.
+  - Migrated keyless routing to Amazon Bedrock (`us.amazon.nova-lite-v1:0` model) to bypass Google AI Studio Free Tier cloud provider IP blocks, generating dynamic credential secrets via EKS Terraform.
 
-- **Phase 5: React + CopilotKit UI Integration (Next)**
-  - Create a lightweight React application using CopilotKit.
-  - Configure frontend to connect to Kong Gateway's public IP address.
+- **Phase 5: React + CopilotKit UI Integration (In Progress)**
+  - Scaffold a React application using CopilotKit for interactive co-agent chat interface.
+  - Set up CopilotKit endpoint to route chat completions traffic to the public Kong Gateway proxy.
+  - Style the user interface with premium modern aesthetics (vibrant color tokens, Outfit typography, smooth CSS transitions, glassmorphism cards).
+
