@@ -54,6 +54,11 @@ resource "aws_iam_role_policy_attachment" "node_AmazonEC2ContainerRegistryReadOn
   role       = aws_iam_role.node.name
 }
 
+resource "aws_iam_role_policy_attachment" "node_AmazonBedrockFullAccess" {
+  policy_arn = "arn:aws:iam::aws:policy/AmazonBedrockFullAccess"
+  role       = aws_iam_role.node.name
+}
+
 # EKS Cluster Control Plane
 resource "aws_eks_cluster" "main" {
   name     = var.cluster_name
@@ -89,7 +94,8 @@ resource "aws_eks_node_group" "main" {
   depends_on = [
     aws_iam_role_policy_attachment.node_AmazonEKSWorkerNodePolicy,
     aws_iam_role_policy_attachment.node_AmazonEKS_CNI_Policy,
-    aws_iam_role_policy_attachment.node_AmazonEC2ContainerRegistryReadOnly
+    aws_iam_role_policy_attachment.node_AmazonEC2ContainerRegistryReadOnly,
+    aws_iam_role_policy_attachment.node_AmazonBedrockFullAccess
   ]
 }
 
@@ -102,4 +108,15 @@ resource "aws_iam_openid_connect_provider" "eks" {
   client_id_list  = ["sts.amazonaws.com"]
   thumbprint_list = [data.tls_certificate.eks.certificates[0].sha1_fingerprint]
   url             = aws_eks_cluster.main.identity[0].oidc[0].issuer
+}
+
+# ECR Repository for the Agent Core Container
+resource "aws_ecr_repository" "agent" {
+  name                 = "agent-core"
+  image_tag_mutability = "MUTABLE"
+  force_delete         = true
+
+  image_scanning_configuration {
+    scan_on_push = false
+  }
 }
