@@ -71,3 +71,11 @@ To protect credit resources, we deploy our infrastructure as an ephemeral enviro
   - Updated React UI with live reasoning details drop-down and active specialist routing badges.
   - Formulated C4 system containers and detailed setup playbooks in the root `README.md`.
 
+- **Phase 8: Frontend Text Beautification & Markdown Rendering (Completed)**
+  - Implemented a lightweight, zero-dependency custom parser in `frontend/src/App.jsx` supporting bold tokens (`**text**`), headings (`#`, `##`, `###`), inline code pills (`` `code` ``), lists (`-` or `*`), and fenced code blocks (` ```lang code ``` `).
+  - Added premium styling rules in `frontend/src/App.css` (dark pre code blocks, purple inline code pills, padded list items, sub-bordered headers) to match our glassmorphism space theme.
+  - Resolved `Failed to Fetch` CORS block errors by adding `global-cors` to `ai-gateway-ingress` annotations.
+  - Fixed client-side React mounting crashes on reload by injecting a dev-only client mock configuration for the `"default"` agent.
+  - Fixed specialist tool resolution by adding a dummy `query` parameter to no-parameter tools, and joining all reasoning and final response `AIMessage` contents in sequence.
+  - Verified and captured rendering success screenshots in the browser.
+
