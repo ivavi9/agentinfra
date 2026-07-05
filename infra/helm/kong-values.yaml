@@ -1,0 +1,16 @@
+# Kong Gateway Configuration (DB-less mode)
+env:
+  database: "off"
+
+# Disable unnecessary default features to save CPU/Memory resource constraints
+ingressController:
+  enabled: true
+  installCRDs: false # Helm installs CRDs automatically or we manage them
+
+# Set LoadBalancer for the proxy (exposes public IP on AWS)
+proxy:
+  type: LoadBalancer
+  http:
+    enabled: true
+  tls:
+    enabled: false # We will handle TLS/SSL terminates or let Kong do it locally. For PoC, HTTP is fine.

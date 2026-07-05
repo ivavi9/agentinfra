@@ -1,0 +1,34 @@
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: ip-rate-limiting
+  namespace: default
+config:
+  minute: 10
+  policy: local
+plugin: rate-limiting
+
+---
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: global-cors
+  namespace: default
+config:
+  origins:
+    - "*"
+  methods:
+    - GET
+    - POST
+    - OPTIONS
+  headers:
+    - Accept
+    - Accept-Version
+    - Content-Length
+    - Content-MD5
+    - Content-Type
+    - Date
+    - Authorization
+  credentials: true
+  max_age: 3600
+plugin: cors

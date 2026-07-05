@@ -1,0 +1,100 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-core
+  namespace: default
+  labels:
+    app: agent-core
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: agent-core
+  template:
+    metadata:
+      labels:
+        app: agent-core
+    spec:
+      serviceAccountName: agent-core-sa
+      containers:
+        - name: agent-core
+          image: 818593257879.dkr.ecr.us-east-1.amazonaws.com/agent-core:latest
+          ports:
+            - containerPort: 8000
+          env:
+            - name: VAULT_ADDR
+              value: "http://vault.default.svc.cluster.local:8200"
+            - name: VAULT_ROLE
+              value: "agent-role"
+            - name: AI_GATEWAY_URL
+              value: "http://kong-kong-proxy.default.svc.cluster.local:80/v1"
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-core-service
+  namespace: default
+spec:
+  selector:
+    app: agent-core
+  ports:
+    - protocol: TCP
+      port: 8000
+      targetPort: 8000
+  type: ClusterIP
+
+---
+# Define a standard Kubernetes Ingress that Kong reads and routes
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: agent-ingress
+  namespace: default
+  annotations:
+    konghq.com/plugins: ip-rate-limiting, global-cors
+spec:
+  ingressClassName: kong
+  rules:
+    - http:
+        paths:
+          - path: /chat
+            pathType: Prefix
+            backend:
+              service:
+                name: agent-core-service
+                port:
+                  number: 8000
+          - path: /health
+            pathType: Prefix
+            backend:
+              service:
+                name: agent-core-service
+                port:
+                  number: 8000
+          - path: /v1/copilotkit
+            pathType: Prefix
+            backend:
+              service:
+                name: agent-core-service
+                port:
+                  number: 8000
