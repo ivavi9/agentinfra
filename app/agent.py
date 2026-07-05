@@ -17,7 +17,7 @@ class LangGraphAgent:
         self.llm = ChatOpenAI(
             base_url=gateway_url,
             api_key=api_key,
-            model="gemini-flash-latest", # Handled & routed by Kong AI Gateway
+            model="gemini-2.5-flash", # Handled & routed by Kong AI Gateway
             temperature=0.7,
             streaming=False
         )
