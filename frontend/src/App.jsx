@@ -5,6 +5,115 @@ import './App.css'
 // Define the public Kong LoadBalancer gateway URL
 const GATEWAY_URL = 'http://acc03372ab84444e295b455feae77206-1034207522.us-east-1.elb.amazonaws.com'
 
+// Parser for inline elements: **bold** and `code`
+const parseInlineMarkdown = (text) => {
+  if (!text) return '';
+
+  // Process bold (**bold**) and inline code (`code`)
+  const regex = /(\*\*.*?\*\*|`.*?`)/g;
+  const parts = text.split(regex);
+
+  return parts.map((part, index) => {
+    if (part.startsWith('**') && part.endsWith('**')) {
+      return <strong key={index} className="md-bold">{part.slice(2, -2)}</strong>;
+    }
+    if (part.startsWith('`') && part.endsWith('`')) {
+      return (
+        <code key={index} className="md-inline-code">
+          {part.slice(1, -1)}
+        </code>
+      );
+    }
+    return part;
+  });
+};
+
+// Parser for block elements: headers, bullet lists, code blocks
+const parseMarkdownText = (text) => {
+  if (!text) return null;
+
+  // Split by code blocks first
+  const parts = text.split(/(```[\s\S]*?```)/g);
+
+  return parts.map((part, partIndex) => {
+    // Fenced Code Block
+    if (part.startsWith('```') && part.endsWith('```')) {
+      const match = part.match(/```(\w*)\n([\s\S]*?)```/);
+      const language = match ? match[1] : '';
+      const code = match ? match[2] : part.slice(3, -3);
+      return (
+        <pre key={`code-${partIndex}`} className="md-code-block">
+          {language && <div className="md-code-lang">{language}</div>}
+          <code className="md-code-content">{code.trim()}</code>
+        </pre>
+      );
+    }
+
+    // Process headers and lists line-by-line
+    const lines = part.split('\n');
+    let inList = false;
+    let listItems = [];
+    const elements = [];
+
+    const flushList = (keySuffix) => {
+      if (listItems.length > 0) {
+        elements.push(
+          <ul key={`ul-${keySuffix}`} className="md-unordered-list">
+            {listItems}
+          </ul>
+        );
+        listItems = [];
+        inList = false;
+      }
+    };
+
+    lines.forEach((line, lineIndex) => {
+      const trimmed = line.trim();
+
+      // Bullet List Match (starts with * or - followed by space)
+      const listMatch = line.match(/^\s*[*+-]\s+(.*)$/);
+      if (listMatch) {
+        inList = true;
+        listItems.push(
+          <li key={`li-${lineIndex}`} className="md-list-item">
+            {parseInlineMarkdown(listMatch[1])}
+          </li>
+        );
+        return;
+      }
+
+      // Non-list line: flush any accumulated list items first
+      if (inList) {
+        flushList(lineIndex);
+      }
+
+      // Headers
+      if (trimmed.startsWith('### ')) {
+        elements.push(<h3 key={`h3-${lineIndex}`} className="md-h3">{parseInlineMarkdown(trimmed.slice(4))}</h3>);
+        return;
+      }
+      if (trimmed.startsWith('## ')) {
+        elements.push(<h2 key={`h2-${lineIndex}`} className="md-h2">{parseInlineMarkdown(trimmed.slice(3))}</h2>);
+        return;
+      }
+      if (trimmed.startsWith('# ')) {
+        elements.push(<h1 key={`h1-${lineIndex}`} className="md-h1">{parseInlineMarkdown(trimmed.slice(2))}</h1>);
+        return;
+      }
+
+      // Paragraph text line
+      if (trimmed) {
+        elements.push(<p key={`p-${lineIndex}`} className="md-paragraph">{parseInlineMarkdown(line)}</p>);
+      }
+    });
+
+    // Flush any leftover list at the end of the block
+    flushList(partIndex);
+
+    return <div key={`block-${partIndex}`} className="md-block-container">{elements}</div>;
+  });
+};
+
 // Helper to render thinking blocks and markdown/clean content
 const renderMessageContent = (content) => {
   if (!content) return null;
@@ -47,14 +156,14 @@ const renderMessageContent = (content) => {
           </div>
         </details>
         {cleanContent && (
-          <div style={{ fontSize: '0.95rem', lineHeight: '1.5', whiteSpace: 'pre-wrap' }}>
-            {cleanContent}
+          <div className="md-rendered-message">
+            {parseMarkdownText(cleanContent)}
           </div>
         )}
       </div>
     );
   }
-  return <div style={{ fontSize: '0.95rem', lineHeight: '1.5', whiteSpace: 'pre-wrap' }}>{content}</div>;
+  return <div className="md-rendered-message">{parseMarkdownText(content)}</div>;
 };
 
 function DashboardContent() {
