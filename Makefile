@@ -11,17 +11,20 @@ TERRAFORM=/opt/homebrew/bin/terraform
 KUBECTL=/opt/homebrew/bin/kubectl
 HELM=/opt/homebrew/bin/helm
 
-.PHONY: help bootstrap deploy-security write-secret teardown config-check clean
+.PHONY: help bootstrap deploy-security write-secret configure-vault-auth build-and-push deploy-agent teardown config-check clean
 
 help:
 	@echo "Agent Infrastructure Ephemeral Environment CLI Helper"
 	@echo "====================================================="
 	@echo "Available commands:"
-	@echo "  make bootstrap       - Spin up EKS & VPC network via Terraform and generate local kubeconfig"
-	@echo "  make deploy-security - Deploy Vault and Kong API Gateway via Helm inside the cluster"
-	@echo "  make write-secret    - Securely prompt and write Google Gemini API Key to Vault"
-	@echo "  make teardown        - Completely destroy EKS, VPC network, and clear local kubeconfig"
-	@echo "  make clean           - Remove local temporary files, caches, and configuration directories"
+	@echo "  make bootstrap            - Spin up EKS & VPC network via Terraform and generate local kubeconfig"
+	@echo "  make deploy-security      - Deploy Vault and Kong API Gateway via Helm inside the cluster"
+	@echo "  make write-secret         - Securely prompt and write Google Gemini API Key to Vault"
+	@echo "  make configure-vault-auth - Configure Vault Kubernetes authentication and policy mappings"
+	@echo "  make build-and-push       - Build Docker container and push to private ECR repository"
+	@echo "  make deploy-agent         - Deploy ServiceAccount and LangGraph agent core pods to EKS"
+	@echo "  make teardown             - Completely destroy EKS, VPC network, and clear local kubeconfig"
+	@echo "  make clean                - Remove local temporary files, caches, and configuration directories"
 
 bootstrap: config-check
 	@echo "==> Initializing Terraform..."
@@ -72,6 +75,41 @@ write-secret: config-check
 	echo "==> Writing key to Vault kv/data/secret/gemini..."; \
 	KUBECONFIG=$(KUBECONFIG_PATH) $(KUBECTL) exec -i vault-0 -- sh -c \
 		"VAULT_TOKEN=root-vault-token vault kv put secret/gemini api_key=$$key"
+
+# ECR URL target (resolves from outputs or default)
+ECR_URL=818593257879.dkr.ecr.us-east-1.amazonaws.com/agent-core
+
+configure-vault-auth: config-check
+	@echo "==> Enabling Kubernetes authentication in Vault..."
+	KUBECONFIG=$(KUBECONFIG_PATH) $(KUBECTL) exec -it vault-0 -- sh -c \
+		"VAULT_TOKEN=root-vault-token vault auth enable kubernetes" || true
+	@echo "==> Configuring Kubernetes API host mapping in Vault..."
+	KUBECONFIG=$(KUBECONFIG_PATH) $(KUBECTL) exec -it vault-0 -- sh -c \
+		"VAULT_TOKEN=root-vault-token vault write auth/kubernetes/config kubernetes_host=\"https://kubernetes.default.svc.cluster.local:443\""
+	@echo "==> Creating Vault read-only policy for Gemini secrets..."
+	KUBECONFIG=$(KUBECONFIG_PATH) $(KUBECTL) exec -i vault-0 -- sh -c \
+		"echo 'path \"secret/data/gemini\" { capabilities = [\"read\"] }' | VAULT_TOKEN=root-vault-token vault policy write agent-policy -"
+	@echo "==> Registering Vault authorization role for agent ServiceAccount..."
+	KUBECONFIG=$(KUBECONFIG_PATH) $(KUBECTL) exec -it vault-0 -- sh -c \
+		"VAULT_TOKEN=root-vault-token vault write auth/kubernetes/role/agent-role bound_service_account_names=agent-core-sa bound_service_account_namespaces=default policies=agent-policy ttl=24h"
+
+build-and-push: config-check
+	@echo "==> Logging in to AWS ECR..."
+	$(AWS_CLI) ecr get-login-password --region $(REGION) --profile $(PROFILE) | docker login --username AWS --password-stdin $(ECR_URL)
+	@echo "==> Building agent core Docker container image..."
+	docker build --platform linux/amd64 -t $(ECR_URL):latest ./app
+	@echo "==> Pushing image to private ECR repository..."
+	docker push $(ECR_URL):latest
+
+deploy-agent: config-check
+	@echo "==> Deploying agent ServiceAccount and permissions..."
+	KUBECONFIG=$(KUBECONFIG_PATH) $(KUBECTL) apply -f infra/k8s/agent-auth.yaml
+	@echo "==> Deploying agent pods and services..."
+	KUBECONFIG=$(KUBECONFIG_PATH) $(KUBECTL) apply -f infra/k8s/agent-deployment.yaml
+	@echo "==> Waiting for agent pod to start..."
+	KUBECONFIG=$(KUBECONFIG_PATH) $(KUBECTL) rollout status deployment/agent-core --timeout=120s
+	@echo "==> Agent core deployed successfully!"
+
 
 teardown: config-check
 	@echo "==> Destroying AWS Infrastructure (this will take 10-15 minutes)..."
