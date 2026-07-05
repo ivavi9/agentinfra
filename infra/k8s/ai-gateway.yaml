@@ -29,7 +29,7 @@ metadata:
   name: ai-gateway-ingress
   namespace: default
   annotations:
-    konghq.com/plugins: gemini-ai-proxy
+    konghq.com/plugins: gemini-ai-proxy, global-cors
     konghq.com/strip-path: "true"
 spec:
   ingressClassName: kong

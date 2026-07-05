@@ -58,3 +58,14 @@ async def chat_endpoint(request: ChatRequest):
     except Exception as e:
         logger.error(f"Error during agent runtime execution: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Agent Error: {str(e)}")
+
+@app.get("/v1/copilotkit/info")
+@app.post("/v1/copilotkit/info")
+@app.post("/v1/copilotkit")
+def copilotkit_info_endpoint():
+    """Dummy CopilotKit backend capability handshake endpoint to satisfy frontend mount discovery."""
+    return {
+        "a2uiEnabled": False,
+        "actions": [],
+        "agents": [{"agentId": "default", "templates": []}]
+    }

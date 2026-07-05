@@ -120,3 +120,20 @@ resource "aws_ecr_repository" "agent" {
     scan_on_push = false
   }
 }
+
+# Create a dedicated IAM user for Bedrock gateway access
+resource "aws_iam_user" "bedrock_user" {
+  name          = "${var.cluster_name}-bedrock-user"
+  force_destroy = true
+}
+
+# Attach Bedrock access policy to this user
+resource "aws_iam_user_policy_attachment" "bedrock_user_access" {
+  user       = aws_iam_user.bedrock_user.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonBedrockFullAccess"
+}
+
+# Generate access keys for this user
+resource "aws_iam_access_key" "bedrock_user_key" {
+  user = aws_iam_user.bedrock_user.name
+}
