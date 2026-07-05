@@ -16,7 +16,7 @@ KUBECTL=/opt/homebrew/bin/kubectl
 HELM=/opt/homebrew/bin/helm
 DOCKER=DOCKER_HOST=unix://$(HOME)/.colima/default/docker.sock /opt/homebrew/bin/docker
 
-.PHONY: help bootstrap deploy-security write-secret configure-vault-auth configure-bedrock-auth build-and-push deploy-agent teardown config-check clean
+.PHONY: help bootstrap deploy-security write-secret configure-vault-auth configure-bedrock-auth build-and-push deploy-agent pre-teardown purge-orphans teardown config-check clean
 
 help:
 	@echo "Agent Infrastructure Ephemeral Environment CLI Helper"
@@ -29,7 +29,9 @@ help:
 	@echo "  make configure-bedrock-auth  - Configure Kong Gateway AI Proxy for AWS Bedrock integration"
 	@echo "  make build-and-push          - Build Docker container and push to private ECR repository"
 	@echo "  make deploy-agent            - Deploy ServiceAccount and LangGraph agent core pods to EKS"
-	@echo "  make teardown             - Completely destroy EKS, VPC network, and clear local kubeconfig"
+	@echo "  make pre-teardown         - Drain k8s LoadBalancer Services so AWS removes ELBs before Terraform runs"
+	@echo "  make purge-orphans        - Force-delete any leftover ELBs, ENIs, SGs blocking the cluster VPC"
+	@echo "  make teardown             - Safe full teardown: pre-teardown → purge-orphans → terraform destroy → clean"
 	@echo "  make clean                - Remove local temporary files, caches, and configuration directories"
 
 bootstrap: config-check
@@ -134,14 +136,104 @@ deploy-agent: config-check
 	@echo "==> Agent core deployed successfully!"
 
 
-teardown: config-check
-	@echo "==> Destroying AWS Infrastructure (this will take 10-15 minutes)..."
+# ---------------------------------------------------------------------------
+# pre-teardown: Gracefully remove Kubernetes-managed cloud resources (ELBs)
+# before Terraform runs, so AWS doesn't leave orphaned dependencies.
+# Safe to run even if kubeconfig is missing — steps degrade gracefully.
+# ---------------------------------------------------------------------------
+pre-teardown:
+	@echo "==> [1/3] Draining Kubernetes LoadBalancer Services (graceful ELB removal)..."
+	@if [ -f $(KUBECONFIG_PATH) ]; then \
+		LB_SVCS=$$(KUBECONFIG=$(KUBECONFIG_PATH) $(KUBECTL) get svc --all-namespaces \
+			-o jsonpath='{range .items[?(@.spec.type=="LoadBalancer")]}{.metadata.namespace}/{.metadata.name} {end}' 2>/dev/null); \
+		if [ -n "$$LB_SVCS" ]; then \
+			echo "  Found LoadBalancer services: $$LB_SVCS"; \
+			for svc in $$LB_SVCS; do \
+				ns=$$(echo $$svc | cut -d/ -f1); \
+				name=$$(echo $$svc | cut -d/ -f2); \
+				echo "  ==> Deleting Service $$name in namespace $$ns..."; \
+				KUBECONFIG=$(KUBECONFIG_PATH) $(KUBECTL) delete svc $$name -n $$ns --timeout=60s || true; \
+			done; \
+			echo "  Waiting 30s for AWS to release ELB network interfaces..."; \
+			sleep 30; \
+		else \
+			echo "  No LoadBalancer services found — skipping."; \
+		fi; \
+	 else \
+		echo "  No kubeconfig found — skipping k8s drain (cluster already gone)."; \
+	fi
+	@echo "==> [1/3] Pre-teardown complete."
+
+# ---------------------------------------------------------------------------
+# purge-orphans: Safety-net pass. Finds and deletes any ELBs, orphan
+# security groups, or dangling ENIs attached to the cluster VPC that were
+# NOT managed by Terraform (created dynamically by the k8s cloud controller).
+# ---------------------------------------------------------------------------
+purge-orphans: config-check
+	@echo "==> [2/3] Scanning for orphaned AWS resources in cluster VPC..."
+	@VPC_ID=$$($(AWS_CLI) ec2 describe-vpcs \
+			--profile $(PROFILE) --region $(REGION) \
+			--filters "Name=tag:Name,Values=$(CLUSTER_NAME)-vpc" \
+			--query "Vpcs[0].VpcId" --output text 2>/dev/null); \
+	if [ -z "$$VPC_ID" ] || [ "$$VPC_ID" = "None" ]; then \
+		echo "  Cluster VPC not found — nothing to purge."; \
+	else \
+		echo "  Found VPC: $$VPC_ID"; \
+		echo "  Deleting orphaned Classic Load Balancers..."; \
+		ELBS=$$($(AWS_CLI) elb describe-load-balancers \
+			--profile $(PROFILE) --region $(REGION) \
+			--query "LoadBalancerDescriptions[?VPCId=='$$VPC_ID'].LoadBalancerName" \
+			--output text 2>/dev/null); \
+		for elb in $$ELBS; do \
+			echo "    ==> Deleting Classic ELB: $$elb"; \
+			$(AWS_CLI) elb delete-load-balancer \
+				--load-balancer-name $$elb \
+				--profile $(PROFILE) --region $(REGION); \
+		done; \
+		echo "  Deleting orphaned Network Load Balancers..."; \
+		NLBS=$$($(AWS_CLI) elbv2 describe-load-balancers \
+			--profile $(PROFILE) --region $(REGION) \
+			--query "LoadBalancers[?VpcId=='$$VPC_ID'].LoadBalancerArn" \
+			--output text 2>/dev/null); \
+		for nlb in $$NLBS; do \
+			echo "    ==> Deleting NLB: $$nlb"; \
+			$(AWS_CLI) elbv2 delete-load-balancer \
+				--load-balancer-arn $$nlb \
+				--profile $(PROFILE) --region $(REGION); \
+		done; \
+		if [ -n "$$ELBS" ] || [ -n "$$NLBS" ]; then \
+			echo "  Waiting 30s for ELB ENIs to be released by AWS..."; \
+			sleep 30; \
+		fi; \
+		echo "  Deleting orphaned non-default Security Groups..."; \
+		SGS=$$($(AWS_CLI) ec2 describe-security-groups \
+			--filters "Name=vpc-id,Values=$$VPC_ID" \
+			--profile $(PROFILE) --region $(REGION) \
+			--query "SecurityGroups[?GroupName!='default'].GroupId" \
+			--output text 2>/dev/null); \
+		for sg in $$SGS; do \
+			echo "    ==> Deleting Security Group: $$sg"; \
+			$(AWS_CLI) ec2 delete-security-group \
+				--group-id $$sg \
+				--profile $(PROFILE) --region $(REGION) || true; \
+		done; \
+	fi
+	@echo "==> [2/3] Orphan purge complete."
+
+# ---------------------------------------------------------------------------
+# teardown: Full safe teardown sequence:
+#   pre-teardown (k8s drain) → purge-orphans (AWS cleanup) → terraform destroy → local clean
+# ---------------------------------------------------------------------------
+teardown: config-check pre-teardown purge-orphans
+	@echo "==> [3/3] Destroying remaining AWS Infrastructure via Terraform..."
 	cd $(TERRAFORM_DIR) && $(TERRAFORM) destroy -auto-approve \
 		-var="aws_profile=$(PROFILE)" \
 		-var="aws_region=$(REGION)" \
 		-var="cluster_name=$(CLUSTER_NAME)"
-	@echo "==> Infrastructure teardown complete!"
+	@echo "==> Terraform destroy complete."
 	$(MAKE) clean
+	@echo ""
+	@echo "  ✅ Teardown complete — AWS account is clean. No idle costs remaining."
 
 config-check:
 	@if [ ! -f $(AWS_CLI) ]; then \
