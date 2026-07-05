@@ -62,9 +62,9 @@ def run_sub_prompt(sub_prompt: str) -> str:
             temperature=0.5,
         )
         result = client.invoke([HumanMessage(content=sub_prompt)])
-        return result.content
+        return json.dumps({"result": result.content})
     except Exception as e:
-        return f"Sub-prompt failed: {str(e)}"
+        return json.dumps({"error": f"Sub-prompt failed: {str(e)}"})
 
 
 CODE_TOOLS = [get_agent_capabilities, run_sub_prompt]

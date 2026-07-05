@@ -1,4 +1,5 @@
 import os
+import json
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
@@ -33,9 +34,9 @@ def synthesize_knowledge(question: str, context: str = "") -> str:
             temperature=0.3,
         )
         result = client.invoke([HumanMessage(content=prompt)])
-        return result.content
+        return json.dumps({"answer": result.content})
     except Exception as e:
-        return f"Research synthesis failed: {str(e)}"
+        return json.dumps({"error": str(e)})
 
 
 @tool
@@ -63,9 +64,9 @@ def compare_concepts(concept_a: str, concept_b: str) -> str:
             temperature=0.3,
         )
         result = client.invoke([HumanMessage(content=prompt)])
-        return result.content
+        return json.dumps({"comparison": result.content})
     except Exception as e:
-        return f"Comparison failed: {str(e)}"
+        return json.dumps({"error": str(e)})
 
 
 RESEARCH_TOOLS = [synthesize_knowledge, compare_concepts]
