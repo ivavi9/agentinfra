@@ -79,3 +79,16 @@ To protect credit resources, we deploy our infrastructure as an ephemeral enviro
   - Fixed specialist tool resolution by adding a dummy `query` parameter to no-parameter tools, and joining all reasoning and final response `AIMessage` contents in sequence.
   - Verified and captured rendering success screenshots in the browser.
 
+- **Phase 9a: Safe Teardown & Orphan Resource Cleanup (Completed)**
+  - Root cause identified: Kubernetes cloud controller creates Classic/NLBs dynamically outside of Terraform state; on cluster deletion these become orphans blocking VPC deletion with a `DependencyViolation` error.
+  - Added `pre-teardown` Make target: drains all `LoadBalancer`-type Kubernetes Services via `kubectl` so the cloud controller voluntarily removes the ELBs. Includes 30s wait for ENI release. Degrades safely if kubeconfig is absent.
+  - Added `purge-orphans` Make target: safety-net pass that queries the cluster VPC by name tag and force-deletes any remaining Classic ELBs, NLBs, and orphan Security Groups (with 30s ENI-release wait after ELB deletion).
+  - Updated `teardown` target to chain: `pre-teardown → purge-orphans → terraform destroy → make clean`.
+  - Verified: final AWS audit showed empty EKS, EC2, VPC, ELB, and NAT Gateway lists after successful run.
+
+## Planned Next Phases
+
+- **Phase 10: Conversational State Persistence** — LangGraph `PostgresSaver` checkpointer backed by RDS/DynamoDB; client-generated `thread_id` header for multi-session memory.
+- **Phase 11: Real-Time Token Streaming** — FastAPI `StreamingResponse` with SSE; LangGraph `.astream_events()` for incremental token delivery to React UI.
+- **Phase 12: Specialist Observability & Logging** — Prometheus + Grafana or LangSmith; specialist routing frequency dashboard; Diagnostics tab in React.
+- **Phase 13: Write-Access Specialist Operations** — `InfraAgent` kubectl read-only pod log exec; `CodeAgent` repository read access for PR drafts from chat.
