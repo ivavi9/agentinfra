@@ -1,0 +1,47 @@
+# Placeholder service pointing to Google's API server with path rewrite annotation
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai-gateway-placeholder
+  namespace: default
+  annotations:
+    konghq.com/path: /v1beta/openai # Direct upstream path override
+spec:
+  type: ExternalName
+  externalName: "generativelanguage.googleapis.com"
+
+---
+# KongPlugin using provider: openai to proxy payload directly and bypass gemini provider model validation lists
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: gemini-ai-proxy
+  namespace: default
+plugin: ai-proxy
+configFrom:
+  secretKeyRef:
+    name: gemini-ai-proxy-config
+    key: config
+
+---
+# Ingress routing /v1 requests to Google's API through Kong and the AI Proxy plugin
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ai-gateway-ingress
+  namespace: default
+  annotations:
+    konghq.com/plugins: gemini-ai-proxy
+    konghq.com/strip-path: "true"
+spec:
+  ingressClassName: kong
+  rules:
+    - http:
+        paths:
+          - path: /v1
+            pathType: Prefix
+            backend:
+              service:
+                name: ai-gateway-placeholder
+                port:
+                  number: 443
