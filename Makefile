@@ -11,18 +11,19 @@ TERRAFORM=/opt/homebrew/bin/terraform
 KUBECTL=/opt/homebrew/bin/kubectl
 HELM=/opt/homebrew/bin/helm
 
-.PHONY: help bootstrap deploy-security write-secret configure-vault-auth build-and-push deploy-agent teardown config-check clean
+.PHONY: help bootstrap deploy-security write-secret configure-vault-auth configure-bedrock-auth build-and-push deploy-agent teardown config-check clean
 
 help:
 	@echo "Agent Infrastructure Ephemeral Environment CLI Helper"
 	@echo "====================================================="
 	@echo "Available commands:"
-	@echo "  make bootstrap            - Spin up EKS & VPC network via Terraform and generate local kubeconfig"
-	@echo "  make deploy-security      - Deploy Vault and Kong API Gateway via Helm inside the cluster"
-	@echo "  make write-secret         - Securely prompt and write Google Gemini API Key to Vault"
-	@echo "  make configure-vault-auth - Configure Vault Kubernetes authentication and policy mappings"
-	@echo "  make build-and-push       - Build Docker container and push to private ECR repository"
-	@echo "  make deploy-agent         - Deploy ServiceAccount and LangGraph agent core pods to EKS"
+	@echo "  make bootstrap               - Spin up EKS & VPC network via Terraform and generate local kubeconfig"
+	@echo "  make deploy-security         - Deploy Vault and Kong API Gateway via Helm inside the cluster"
+	@echo "  make write-secret            - Securely prompt and write Google Gemini API Key to Vault"
+	@echo "  make configure-vault-auth    - Configure Vault Kubernetes authentication and policy mappings"
+	@echo "  make configure-bedrock-auth  - Configure Kong Gateway AI Proxy for AWS Bedrock integration"
+	@echo "  make build-and-push          - Build Docker container and push to private ECR repository"
+	@echo "  make deploy-agent            - Deploy ServiceAccount and LangGraph agent core pods to EKS"
 	@echo "  make teardown             - Completely destroy EKS, VPC network, and clear local kubeconfig"
 	@echo "  make clean                - Remove local temporary files, caches, and configuration directories"
 
@@ -96,6 +97,19 @@ configure-vault-auth: config-check
 	@echo "==> Registering Vault authorization role for agent ServiceAccount..."
 	KUBECONFIG=$(KUBECONFIG_PATH) $(KUBECTL) exec -it vault-0 -- sh -c \
 		"VAULT_TOKEN=root-vault-token vault write auth/kubernetes/role/agent-role bound_service_account_names=agent-core-sa bound_service_account_namespaces=default policies=agent-policy ttl=24h"
+
+configure-bedrock-auth: config-check
+	@echo "==> Fetching Bedrock credentials from Terraform..."
+	@access_key=$$(cd $(TERRAFORM_DIR) && $(TERRAFORM) output -raw bedrock_access_key_id); \
+	secret_key=$$(cd $(TERRAFORM_DIR) && $(TERRAFORM) output -raw bedrock_secret_access_key); \
+	if [ -z "$$access_key" ] || [ -z "$$secret_key" ]; then \
+		echo "ERROR: Failed to retrieve Bedrock keys from Terraform outputs"; \
+		exit 1; \
+	fi; \
+	echo "==> Generating Kong Bedrock secret configuration..."; \
+	KUBECONFIG=$(KUBECONFIG_PATH) $(KUBECTL) create secret generic gemini-ai-proxy-config \
+		--from-literal=config="{\"route_type\": \"llm/v1/chat\", \"auth\": {\"allow_override\": false, \"aws_access_key_id\": \"$$access_key\", \"aws_secret_access_key\": \"$$secret_key\"}, \"model\": {\"provider\": \"bedrock\", \"name\": \"us.amazon.nova-lite-v1:0\", \"options\": {\"bedrock\": {\"aws_region\": \"$(REGION)\"}}}}" \
+		--dry-run=client -o yaml | KUBECONFIG=$(KUBECONFIG_PATH) $(KUBECTL) apply -f -
 
 build-and-push: config-check
 	@echo "==> Logging in to AWS ECR..."
