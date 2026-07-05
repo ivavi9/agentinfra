@@ -269,7 +269,7 @@ function DashboardContent() {
 
 function App() {
   return (
-    <CopilotKit>
+    <CopilotKit runtimeUrl={`${GATEWAY_URL}/v1/copilotkit`}>
       <DashboardContent />
     </CopilotKit>
   )
