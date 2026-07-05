@@ -3,7 +3,7 @@ import { CopilotKit, useCopilotReadable } from '@copilotkit/react-core'
 import './App.css'
 
 // Define the public Kong LoadBalancer gateway URL
-const GATEWAY_URL = 'http://a659b32a9d28f421da4c4090c1d0b3d0-774720386.us-east-1.elb.amazonaws.com'
+const GATEWAY_URL = 'http://acc03372ab84444e295b455feae77206-1034207522.us-east-1.elb.amazonaws.com'
 
 // Helper to render thinking blocks and markdown/clean content
 const renderMessageContent = (content) => {
