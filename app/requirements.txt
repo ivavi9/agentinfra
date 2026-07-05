@@ -1,7 +1,7 @@
 fastapi==0.111.0
 uvicorn==0.30.1
 langgraph==0.1.4
-langchain-core==0.2.10
+langchain-core>=0.2.27,<0.3.0
 langchain==0.2.12
 langchain-openai==0.1.13
 hvac==2.3.0

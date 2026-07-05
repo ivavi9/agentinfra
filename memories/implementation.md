@@ -50,8 +50,16 @@ To protect credit resources, we deploy our infrastructure as an ephemeral enviro
   - Set up Kong AI Ingress mapping OpenAI format to model backend.
   - Migrated keyless routing to Amazon Bedrock (`us.amazon.nova-lite-v1:0` model) to bypass Google AI Studio Free Tier cloud provider IP blocks, generating dynamic credential secrets via EKS Terraform.
 
-- **Phase 5: React + CopilotKit UI Integration (In Progress)**
-  - Scaffold a React application using CopilotKit for interactive co-agent chat interface.
-  - Set up CopilotKit endpoint to route chat completions traffic to the public Kong Gateway proxy.
-  - Style the user interface with premium modern aesthetics (vibrant color tokens, Outfit typography, smooth CSS transitions, glassmorphism cards).
+- **Phase 5: React + CopilotKit UI Integration (Completed)**
+  - Scaffolded Vite + React application with CopilotKit (`useCopilotReadable` hooks).
+  - Built premium dashboard UI: dark space theme, Outfit typography, glassmorphism cards, pulsing status indicator.
+  - Fixed `useMakeCopilotReadable` → `useCopilotReadable` breaking API change.
+  - Added `runtimeUrl` prop to `<CopilotKit>` provider to fix black-screen crash.
+  - Vite production build verified successfully (9138 modules transformed).
 
+- **Phase 6: LangGraph Tool Registration (In Progress)**
+  - Registered 4 tools in `app/agent.py`: `get_infrastructure_status`, `get_agent_capabilities`, `call_health_endpoint`, `run_sub_prompt`.
+  - Switched from single-node graph to ToolNode + conditional routing loop (agent → tools → agent).
+  - Added `langchain==0.2.12` to `requirements.txt`; fixed `langchain-core` pin to `>=0.2.27,<0.3.0`.
+  - Added `DOCKER` Makefile macro pointing to Colima socket (`~/.colima/default/docker.sock`) since Docker Desktop is not installed.
+  - ECR rebuild in progress.
