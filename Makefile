@@ -97,7 +97,7 @@ build-and-push: config-check
 	@echo "==> Logging in to AWS ECR..."
 	$(AWS_CLI) ecr get-login-password --region $(REGION) --profile $(PROFILE) | docker login --username AWS --password-stdin $(ECR_URL)
 	@echo "==> Building agent core Docker container image..."
-	docker build --platform linux/amd64 -t $(ECR_URL):latest ./app
+	docker build --no-cache --platform linux/amd64 -t $(ECR_URL):latest ./app
 	@echo "==> Pushing image to private ECR repository..."
 	docker push $(ECR_URL):latest
 
