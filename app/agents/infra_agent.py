@@ -1,13 +1,16 @@
 import os
 import json
 import httpx
+import logging
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
 from langgraph.prebuilt import ToolNode
 from langgraph.graph import StateGraph, END
 from typing import TypedDict, Annotated, List
 from langgraph.graph.message import add_messages
+
+logger = logging.getLogger("infra_agent")
 
 
 # ── Tools scoped to infrastructure domain ────────────────────────────────────
@@ -61,10 +64,19 @@ class InfraAgent:
         self.graph = self._build()
 
     def _call_model(self, state: InfraState) -> dict:
-        return {"messages": [self.llm.invoke(state["messages"])]}
+        system_prompt = SystemMessage(
+            content="You are the InfraAgent, a specialist EKS infrastructure diagnostics subagent. "
+                    "You have tools available to check EKS cluster status (get_infrastructure_status) and "
+                    "Kubernetes pod health (call_health_endpoint). "
+                    "You MUST invoke the appropriate tool to retrieve live data before answering. "
+                    "Do not guess or assume. Always invoke a tool if the user asks about the cluster status or health."
+        )
+        messages = [system_prompt] + state["messages"]
+        return {"messages": [self.llm.invoke(messages)]}
 
     def _route(self, state: InfraState) -> str:
         last = state["messages"][-1]
+        logger.info(f"Infra route check: last message type={type(last)}, tool_calls={getattr(last, 'tool_calls', None)}")
         if hasattr(last, "tool_calls") and last.tool_calls:
             return "tools"
         return END
@@ -80,7 +92,12 @@ class InfraAgent:
 
     def run(self, messages: List[BaseMessage]) -> str:
         result = self.graph.invoke({"messages": messages})
-        for msg in reversed(result["messages"]):
+        ai_contents = []
+        for msg in result["messages"]:
             if isinstance(msg, AIMessage) and msg.content:
-                return msg.content
+                val = msg.content.strip()
+                if val and val not in ai_contents:
+                    ai_contents.append(val)
+        if ai_contents:
+            return "\n\n".join(ai_contents)
         return "Infra agent completed with no text output."

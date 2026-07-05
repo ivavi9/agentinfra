@@ -1,12 +1,15 @@
 import os
 import json
+import logging
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
 from langgraph.prebuilt import ToolNode
 from langgraph.graph import StateGraph, END
 from typing import TypedDict, Annotated, List
 from langgraph.graph.message import add_messages
+
+logger = logging.getLogger("research_agent")
 
 
 # ── Tools scoped to research / knowledge synthesis domain ────────────────────
@@ -87,10 +90,18 @@ class ResearchAgent:
         self.graph = self._build()
 
     def _call_model(self, state: ResearchState) -> dict:
-        return {"messages": [self.llm.invoke(state["messages"])]}
+        system_prompt = SystemMessage(
+            content="You are the ResearchAgent, a specialist conceptual research and comparison subagent. "
+                    "You have tools available to synthesize knowledge (synthesize_knowledge) and compare concepts (compare_concepts). "
+                    "You MUST invoke the appropriate tool to run the comparison or synthesis before answering. "
+                    "Always call compare_concepts if comparing two topics, or synthesize_knowledge if researching a concept."
+        )
+        messages = [system_prompt] + state["messages"]
+        return {"messages": [self.llm.invoke(messages)]}
 
     def _route(self, state: ResearchState) -> str:
         last = state["messages"][-1]
+        logger.info(f"Research route check: last message type={type(last)}, tool_calls={getattr(last, 'tool_calls', None)}")
         if hasattr(last, "tool_calls") and last.tool_calls:
             return "tools"
         return END
@@ -106,7 +117,12 @@ class ResearchAgent:
 
     def run(self, messages: List[BaseMessage]) -> str:
         result = self.graph.invoke({"messages": messages})
-        for msg in reversed(result["messages"]):
+        ai_contents = []
+        for msg in result["messages"]:
             if isinstance(msg, AIMessage) and msg.content:
-                return msg.content
+                val = msg.content.strip()
+                if val and val not in ai_contents:
+                    ai_contents.append(val)
+        if ai_contents:
+            return "\n\n".join(ai_contents)
         return "Research agent completed with no text output."
