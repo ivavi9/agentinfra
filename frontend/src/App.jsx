@@ -3,7 +3,7 @@ import { CopilotKit, useCopilotReadable } from '@copilotkit/react-core'
 import './App.css'
 
 // Define the public Kong LoadBalancer gateway URL
-const GATEWAY_URL = 'http://acc03372ab84444e295b455feae77206-1034207522.us-east-1.elb.amazonaws.com'
+const GATEWAY_URL = 'http://a2f7272bd13024dc081958b8355be57e-1703852142.us-east-1.elb.amazonaws.com'
 
 // Parser for inline elements: **bold** and `code`
 const parseInlineMarkdown = (text) => {
@@ -167,6 +167,14 @@ const renderMessageContent = (content) => {
 };
 
 function DashboardContent() {
+  const [sessionId] = useState(() => {
+    let id = sessionStorage.getItem('agent_session_id')
+    if (!id) {
+      id = 'session-' + Math.random().toString(36).substring(2, 15)
+      sessionStorage.setItem('agent_session_id', id)
+    }
+    return id
+  })
   const [messages, setMessages] = useState([
     {
       role: 'assistant',
@@ -178,6 +186,24 @@ function DashboardContent() {
   const [systemPrompt, setSystemPrompt] = useState('Standard EKS Assistant Profile')
   const [temperature, setTemperature] = useState(0.7)
   const chatEndRef = useRef(null)
+
+  // Fetch stateful chat history on mount
+  useEffect(() => {
+    const loadHistory = async () => {
+      try {
+        const response = await fetch(`${GATEWAY_URL}/chat/history?session_id=${sessionId}`)
+        if (response.ok) {
+          const data = await response.json()
+          if (data.history && data.history.length > 0) {
+            setMessages(data.history)
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to load chat history:', err)
+      }
+    }
+    loadHistory()
+  }, [sessionId])
 
   // Make dashboard state readable to CopilotKit context
   useCopilotReadable({
@@ -200,40 +226,93 @@ function DashboardContent() {
 
     const userMessage = input.trim()
     setInput('')
-    setMessages((prev) => [...prev, { role: 'user', content: userMessage }])
+    
+    // Add user message and temporary empty assistant message immediately
+    setMessages((prev) => [
+      ...prev, 
+      { role: 'user', content: userMessage },
+      { role: 'assistant', content: '', specialist: null }
+    ])
     setLoading(true)
 
     try {
-      const response = await fetch(`${GATEWAY_URL}/chat`, {
+      const response = await fetch(`${GATEWAY_URL}/chat/stream`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ prompt: userMessage })
+        body: JSON.stringify({ prompt: userMessage, session_id: sessionId })
       })
 
       if (!response.ok) {
         throw new Error(`HTTP error ${response.status}`)
       }
 
-      const data = await response.json()
-      setMessages((prev) => [
-        ...prev, 
-        { 
-          role: 'assistant', 
-          content: data.response, 
-          specialist: data.specialist 
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder('utf-8')
+      let done = false
+      let accumulatedText = ''
+      let resolvedSpecialist = null
+
+      while (!done) {
+        const { value, done: readerDone } = await reader.read()
+        done = readerDone
+        if (value) {
+          const chunkStr = decoder.decode(value, { stream: !done })
+          const lines = chunkStr.split('\n')
+          
+          for (const line of lines) {
+            const trimmed = line.trim()
+            if (trimmed.startsWith('data: ')) {
+              try {
+                const parsed = JSON.parse(trimmed.slice(6))
+                if (parsed.type === 'token') {
+                  accumulatedText += parsed.data
+                  setMessages((prev) => {
+                    const updated = [...prev]
+                    if (updated.length > 0) {
+                      updated[updated.length - 1] = {
+                        ...updated[updated.length - 1],
+                        content: accumulatedText
+                      }
+                    }
+                    return updated
+                  })
+                } else if (parsed.type === 'specialist') {
+                  resolvedSpecialist = parsed.data
+                  setMessages((prev) => {
+                    const updated = [...prev]
+                    if (updated.length > 0) {
+                      updated[updated.length - 1] = {
+                        ...updated[updated.length - 1],
+                        specialist: resolvedSpecialist
+                      }
+                    }
+                    return updated
+                  })
+                } else if (parsed.type === 'error') {
+                  throw new Error(parsed.data)
+                }
+              } catch (jsonErr) {
+                console.warn('Failed to parse SSE line JSON:', trimmed, jsonErr)
+              }
+            }
+          }
         }
-      ])
+      }
     } catch (err) {
-      console.error('Fetch error:', err)
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: 'assistant',
-          content: `⚠️ Connection Error: Failed to communicate with the AgentCore microservice. (Reason: ${err.message})`
+      console.error('Fetch stream error:', err)
+      setMessages((prev) => {
+        const updated = [...prev]
+        if (updated.length > 0) {
+          updated[updated.length - 1] = {
+            role: 'assistant',
+            content: `⚠️ Connection Error: Failed to communicate with the AgentCore microservice. (Reason: ${err.message})`,
+            specialist: null
+          }
         }
-      ])
+        return updated
+      })
     } finally {
       setLoading(false)
     }

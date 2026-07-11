@@ -1,12 +1,11 @@
 # Session Handoff & State Tracker
 
 ## Current Session Status
-- **Phase**: Phase 9a — Safe Teardown & Orphan Resource Cleanup (Complete)
-- **AWS Infrastructure Status**: 🟢 Fully torn down. All EKS, EC2, VPC, ELB, NAT resources confirmed destroyed.
-- **Core App Status**: Code complete and pushed to `origin/main`. Ready for next `make bootstrap`.
-- **Security & Gateway Status**: Keyless SA OIDC tokens and Vault policies preserved in Terraform / k8s YAML. No credentials hardcoded.
-- **Frontend Status**: Vite React dashboard with custom markdown parser, specialist badges, and collapsible reasoning chains.
-
+- **Phase**: Phase 11 — Real-Time Streaming & Stateful Memory (Complete)
+- **AWS Infrastructure Status**: 🟢 Active and fully running in EKS cluster.
+- **Core App Status**: Code complete, tested, and pushed to ECR.
+- **Security & Gateway Status**: Keyless SA OIDC tokens, Vault policies, CORS, and Rate Limits fully configured and active.
+- **Frontend Status**: Vite React dashboard with real-time SSE token streaming, markdown renderer, specialist badges, and collapsible reasoning chains.
 
 ## Accomplishments (Cumulative)
 1. Drafted poC architecture spec with SOLID principles & security governance rules.
@@ -24,8 +23,13 @@
 13. Fixed CORS browser blocks and client-side mounting crash loops on page load.
 14. Fixed specialist tool resolution by adding query arguments to no-parameter tools and joining reasoning messages.
 15. Added safe dependency-ordered `make teardown` with `pre-teardown` (k8s ELB drain) and `purge-orphans` (AWS Classic/NLB + SG force-delete) to prevent `DependencyViolation` hangs on VPC deletion.
+16. Integrated LangGraph `MemorySaver` checkpointer for stateful conversation tracking.
+17. Propagated `RunnableConfig` context throughout the supervisor and specialist subagent graphs.
+18. Implemented FastAPI SSE streaming endpoints (`POST /chat/stream`) and history endpoints (`GET /chat/history`).
+19. Rebuilt the frontend chat architecture to handle chunked real-time token stream merges.
 
-## Next Steps
-- [ ] Resume with `make bootstrap` at the start of the next session to spin up EKS + VPC.
-- [ ] Implement Phase 10: LangGraph `PostgresSaver` checkpointer for conversational state persistence.
-- [ ] Implement Phase 11: FastAPI SSE streaming endpoint for real-time token delivery.
+## Next Steps (Technical & Business Roadmap)
+- [ ] Upgrade MemorySaver to AWS RDS PostgreSQL Checkpointer backing for multi-replica stateful persistence.
+- [ ] Add user authentication layers (e.g. AWS Cognito / Auth0) for multi-tenant workspace partitioning.
+- [ ] Implement agentic human-in-the-loop approvals in the UI for destructive infrastructure changes.
+- [ ] Add cost allocation tagging and budget alerts on Bedrock Nova model usage.

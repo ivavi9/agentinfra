@@ -103,6 +103,32 @@ graph TB
   1. A **collapsible reasoning details drawer** showing agent reasoning processes.
   2. A **specialist badge** indicating which sub-agent performed the task.
 
+### 5. Real-Time Token Streaming & Thread Memory
+* **Context**: Waiting for long multi-agent tool loops to complete before returning text degrades the user experience.
+* **Decision**: We replaced standard REST endpoints with a FastAPI asynchronous Server-Sent Events (SSE) generator (`/chat/stream`). We propagated `RunnableConfig` parameters through the supervisor and specialist subgraphs to bind execution to LangGraph's stateful `MemorySaver` checkpointer. The React UI parses SSE chunk updates dynamically, appending tokens to the active message box in real-time.
+
+---
+
+## 🗺️ Product & Engineering Roadmap
+
+The following four key upgrades are planned to transition the prototype to a production-grade multi-tenant workspace:
+
+### 1. Persistent Thread Checkpointer (AWS RDS PostgreSQL)
+* **Goal**: Decouple session memory from pod memory to allow horizontal autoscaling of stateless containers.
+* **Implementation**: Deploy an RDS PostgreSQL instance via Terraform. Replace the local in-memory `MemorySaver` checkpointer with `PostgresSaver` connection pools in the supervisor graph.
+
+### 2. User Authentication & Multi-Tenancy (AWS Cognito / Auth0)
+* **Goal**: Secure agent workspaces and partition thread histories contextually per developer identity.
+* **Implementation**: Setup a Cognito User Pool, enforce JWT validation at the Kong Gateway Ingress level using the `jwt` plugin, and capture verified `user_id` context to partition database records.
+
+### 3. Specialist Analytics & Observability (Grafana / LangSmith)
+* **Goal**: Monitor LLM token costs, track specialist routing accuracy, and measure tool latency distributions.
+* **Implementation**: Hook Prometheus metrics targets into the FastAPI middleware to export routing gauges, and stream graph traces directly to LangSmith via OIDC-secured credential secrets.
+
+### 4. Human-in-the-Loop Infrastructure Approvals
+* **Goal**: Enforce safety boundaries on destructive operations (e.g. running Terraform or scaling deployments).
+* **Implementation**: Leverage LangGraph's `interrupt_before` capability. Halt graph execution at write-action nodes, emit an approval event to the frontend, and resume execution only after a developer clicks "Approve" inside the chat card.
+
 ---
 
 ## 🚀 Bootstrap & Setup Playbook

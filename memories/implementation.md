@@ -86,9 +86,19 @@ To protect credit resources, we deploy our infrastructure as an ephemeral enviro
   - Updated `teardown` target to chain: `pre-teardown → purge-orphans → terraform destroy → make clean`.
   - Verified: final AWS audit showed empty EKS, EC2, VPC, ELB, and NAT Gateway lists after successful run.
 
+- **Phase 10: Conversational State Persistence (Completed)**
+  - Integrated LangGraph stateful `MemorySaver` checkpointer inside `SupervisorAgent` in `app/agents/supervisor.py` to persist context across separate REST requests.
+  - Refactored `SupervisorAgent` node functions (`_infra_node`, `_code_node`, `_research_node`) and specialists to accept and pass `RunnableConfig` down the execution tree.
+  - Added `GET /chat/history` endpoint to FastAPI in `app/main.py` to fetch previous thread messages, and configured the frontend to recover conversation context contextually.
+
+- **Phase 11: Real-Time Token Streaming (Completed)**
+  - Replaced FastAPI blocking route with an asynchronous Server-Sent Events (SSE) generator at `POST /chat/stream`.
+  - Added callback event filtering to capture `on_chat_model_stream` events from subagent completions, yielding tokens immediately.
+  - Redesigned the React chat interface in `frontend/src/App.jsx` to append chunk tokens contextually in real-time, displaying dynamic badges and collapsible thought blocks.
+
 ## Planned Next Phases
 
-- **Phase 10: Conversational State Persistence** — LangGraph `PostgresSaver` checkpointer backed by RDS/DynamoDB; client-generated `thread_id` header for multi-session memory.
-- **Phase 11: Real-Time Token Streaming** — FastAPI `StreamingResponse` with SSE; LangGraph `.astream_events()` for incremental token delivery to React UI.
-- **Phase 12: Specialist Observability & Logging** — Prometheus + Grafana or LangSmith; specialist routing frequency dashboard; Diagnostics tab in React.
-- **Phase 13: Write-Access Specialist Operations** — `InfraAgent` kubectl read-only pod log exec; `CodeAgent` repository read access for PR drafts from chat.
+- **Phase 12: AWS RDS PostgreSQL Checkpointer backing** — Replace in-memory checkpointer with an external PostgreSQL instance for multi-replica stateless container scale-out.
+- **Phase 13: User Authentication & Multi-Tenant Partitioning** — Introduce Cognito / Auth0 integration to separate state threads per authenticated developer.
+- **Phase 14: Specialist Observability & Logging** — Prometheus + Grafana or LangSmith integration; specialist routing frequency dashboard; Diagnostics tab in React.
+- **Phase 15: Agentic Human-in-the-Loop Actions** — Add approval buttons in the UI for destructive operations (e.g. executing terraform plan / kubectl edits).

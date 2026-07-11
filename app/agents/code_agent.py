@@ -3,6 +3,7 @@ import logging
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
+from langchain_core.runnables import RunnableConfig
 from langgraph.prebuilt import ToolNode
 from langgraph.graph import StateGraph, END
 from typing import TypedDict, Annotated, List
@@ -91,7 +92,7 @@ class CodeAgent:
         self.tool_node = ToolNode(CODE_TOOLS)
         self.graph = self._build()
 
-    def _call_model(self, state: CodeState) -> dict:
+    async def _call_model(self, state: CodeState, config: RunnableConfig) -> dict:
         system_prompt = SystemMessage(
             content="You are the CodeAgent, a specialist subagent. "
                     "You have tools available to check this agent's architecture and capabilities manifest (get_agent_capabilities) and "
@@ -99,7 +100,15 @@ class CodeAgent:
                     "You MUST invoke the appropriate tool to answer. Always call get_agent_capabilities if asked about your capabilities or tools."
         )
         messages = [system_prompt] + state["messages"]
-        return {"messages": [self.llm.invoke(messages)]}
+        for idx, msg in enumerate(messages):
+            logger.info(f"Code msg {idx}: type={type(msg)}, content={msg.content[:100]!r}, tool_calls={getattr(msg, 'tool_calls', None)}")
+        response = None
+        async for chunk in self.llm.astream(messages, config=config):
+            if response is None:
+                response = chunk
+            else:
+                response += chunk
+        return {"messages": [response]}
 
     def _route(self, state: CodeState) -> str:
         last = state["messages"][-1]
@@ -119,6 +128,18 @@ class CodeAgent:
 
     def run(self, messages: List[BaseMessage]) -> str:
         result = self.graph.invoke({"messages": messages})
+        ai_contents = []
+        for msg in result["messages"]:
+            if isinstance(msg, AIMessage) and msg.content:
+                val = msg.content.strip()
+                if val and val not in ai_contents:
+                    ai_contents.append(val)
+        if ai_contents:
+            return "\n\n".join(ai_contents)
+        return "Code agent completed with no text output."
+
+    async def arun(self, messages: List[BaseMessage], config: RunnableConfig = None) -> str:
+        result = await self.graph.ainvoke({"messages": messages}, config=config)
         ai_contents = []
         for msg in result["messages"]:
             if isinstance(msg, AIMessage) and msg.content:

@@ -65,6 +65,8 @@ deploy-security: config-check
 		--values infra/helm/kong-values.yaml
 	@echo "==> Applying Kong rate-limiting and CORS policies..."
 	KUBECONFIG=$(KUBECONFIG_PATH) $(KUBECTL) apply -f infra/k8s/kong-plugins.yaml
+	@echo "==> Deploying AI Gateway Ingress rules..."
+	KUBECONFIG=$(KUBECONFIG_PATH) $(KUBECTL) apply -f infra/k8s/ai-gateway.yaml
 	@echo "==> Waiting for Vault pod to be Ready..."
 	KUBECONFIG=$(KUBECONFIG_PATH) $(KUBECTL) wait --for=condition=Ready pod/vault-0 --timeout=120s
 	@echo "==> Bootstrapping Vault KV engine..."
@@ -122,7 +124,7 @@ build-and-push: config-check
 	@echo "==> Logging in to AWS ECR..."
 	$(AWS_CLI) ecr get-login-password --region $(REGION) --profile $(PROFILE) | $(DOCKER) login --username AWS --password-stdin $(ECR_URL)
 	@echo "==> Building agent core Docker container image..."
-	$(DOCKER) build --pull --no-cache --platform linux/amd64 -t $(ECR_URL):latest ./app
+	$(DOCKER) build --pull --platform linux/amd64 -t $(ECR_URL):latest ./app
 	@echo "==> Pushing image to private ECR repository..."
 	$(DOCKER) push $(ECR_URL):latest
 
