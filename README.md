@@ -37,6 +37,14 @@ graph TB
                 CodeAgent["💻 CodeAgent\n(code_agent.py)"]
                 ResearchAgent["📚 ResearchAgent\n(research_agent.py)"]
             end
+
+            subgraph DatabricksIngest ["🛢️ Databricks Ingest Specialist Graph"]
+                BAAnalyst["📊 BAAnalystAgent"]
+                Profiler["🗂️ DataProfilerAgent"]
+                Conformer["💎 SilverModelAgent"]
+                Mapper["🗺️ STMMappingAgent"]
+                DABGen["📦 DABGeneratorAgent"]
+            end
         end
 
         %% Security Pod
@@ -69,12 +77,22 @@ graph TB
     CodeAgent -->|Dispatches Sub-prompt| KongAI
     ResearchAgent -->|Concept Comparison| KongAI
     
+    %% Databricks Ingestion Subgraph flow
+    FastAPI -->|Upload BRD| BAAnalyst
+    BAAnalyst -->|Extract Entities| Profiler
+    Profiler -->|Bronze delta layout| Conformer
+    Conformer -->|Conforms to IBM BDW| Mapper
+    Mapper -->|Source-to-Target Map| FastAPI
+    FastAPI -->|Human Override & Approve| DABGen
+    DABGen -->|Compiles Bundle| KongAI
+    
     KongAI -->|Translates & routes| NovaLite
     
     style AWS fill:none,stroke:#4f46e5,stroke-width:2px,stroke-dasharray: 5 5;
     style IngressLayer fill:none,stroke:#3b82f6,stroke-width:1.5px;
     style AgentPod fill:none,stroke:#8b5cf6,stroke-width:1.5px;
     style Specialists fill:none,stroke:#a78bfa,stroke-width:1.5px;
+    style DatabricksIngest fill:none,stroke:#06b6d4,stroke-width:1.5px;
     style Bedrock fill:none,stroke:#475569,stroke-width:2px,stroke-dasharray: 5 5;
     
     style Kong fill:#fee2e2,stroke:#ef4444,stroke-width:1.5px,color:#991b1b;
@@ -86,6 +104,11 @@ graph TB
     style InfraAgent fill:#f0fdf4,stroke:#16a34a,stroke-width:1px,color:#166534;
     style CodeAgent fill:#f0fdfa,stroke:#0d9488,stroke-width:1px,color:#115e59;
     style ResearchAgent fill:#fdf2f8,stroke:#db2777,stroke-width:1px,color:#9d174d;
+    style BAAnalyst fill:#ecfeff,stroke:#06b6d4,stroke-width:1px,color:#0891b2;
+    style Profiler fill:#ecfeff,stroke:#06b6d4,stroke-width:1px,color:#0891b2;
+    style Conformer fill:#ecfeff,stroke:#06b6d4,stroke-width:1px,color:#0891b2;
+    style Mapper fill:#ecfeff,stroke:#06b6d4,stroke-width:1px,color:#0891b2;
+    style DABGen fill:#ecfeff,stroke:#06b6d4,stroke-width:1px,color:#0891b2;
     style NovaLite fill:#f8fafc,stroke:#475569,stroke-width:1.5px,color:#1e293b;
     style Developer fill:#f8fafc,stroke:#475569,stroke-width:1.5px,color:#1e293b;
     style Cognito fill:#fee2e2,stroke:#f87171,stroke-width:1.5px,color:#7f1d1d;
@@ -205,6 +228,11 @@ make teardown
 │   │   ├── infra_agent.py # EKS health/status diagnostic tools
 │   │   ├── code_agent.py  # Introspection & sub-prompt execution
 │   │   ├── research_agent.py # Multi-hop knowledge comparison tools
+│   │   ├── ba_analyst_agent.py # Business Analyst value stream parser
+│   │   ├── data_profiler_agent.py # Delta Bronze profiler specialist
+│   │   ├── silver_model_agent.py # IBM BDW Conformance specialist
+│   │   ├── stm_mapping_agent.py # Source-to-Target mapping generator
+│   │   ├── dab_generator_agent.py # DAB Bundle compiler specialist
 │   │   └── supervisor.py  # Intent router & orchestrator
 │   ├── agent.py           # Thin entry shim re-exporting supervisor
 │   ├── main.py            # FastAPI service exposing /chat & /health
