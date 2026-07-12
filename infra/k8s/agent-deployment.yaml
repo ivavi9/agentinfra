@@ -98,3 +98,17 @@ spec:
                 name: agent-core-service
                 port:
                   number: 8000
+          - path: /pipeline
+            pathType: Prefix
+            backend:
+              service:
+                name: agent-core-service
+                port:
+                  number: 8000
+          - path: /metrics
+            pathType: Prefix
+            backend:
+              service:
+                name: agent-core-service
+                port:
+                  number: 8000
