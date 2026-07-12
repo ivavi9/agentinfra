@@ -3,7 +3,9 @@ import { CopilotKit, useCopilotReadable } from '@copilotkit/react-core'
 import './App.css'
 
 // Define the public Kong LoadBalancer gateway URL
-const GATEWAY_URL = 'http://a2f7272bd13024dc081958b8355be57e-1703852142.us-east-1.elb.amazonaws.com'
+const GATEWAY_URL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+  ? 'http://127.0.0.1:8000'
+  : 'http://a2f7272bd13024dc081958b8355be57e-1703852142.us-east-1.elb.amazonaws.com'
 
 // Parser for inline elements: **bold** and `code`
 const parseInlineMarkdown = (text) => {

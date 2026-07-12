@@ -124,9 +124,23 @@ async def startup_event():
     logger.info("Initializing AgentCore backend...")
     try:
         # Retrieve all secrets keylessly from HashiCorp Vault
-        secrets = secrets_manager.get_secrets()
-        api_key = secrets["api_key"]
-        logger.info("Successfully retrieved Gemini API key from Vault!")
+        try:
+            secrets = secrets_manager.get_secrets()
+            api_key = secrets["api_key"]
+            logger.info("Successfully retrieved Gemini API key from Vault!")
+        except Exception as vault_err:
+            logger.warning(f"Could not connect to Vault: {vault_err}. Checking environment variables fallback...")
+            api_key = os.getenv("GEMINI_API_KEY") or os.getenv("OPENAI_API_KEY")
+            if not api_key:
+                raise RuntimeError("No API key found in Vault or GEMINI_API_KEY/OPENAI_API_KEY environment variables.")
+            secrets = {
+                "api_key": api_key,
+                "db_host": os.getenv("DB_HOST"),
+                "db_port": os.getenv("DB_PORT", "5432"),
+                "db_name": os.getenv("DB_NAME"),
+                "db_user": os.getenv("DB_USER"),
+                "db_password": os.getenv("DB_PASSWORD"),
+            }
         
         # Pre-load JWKS keys for Cognito validation
         cognito_url = secrets.get("cognito_endpoint")
