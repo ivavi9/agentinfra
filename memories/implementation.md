@@ -96,9 +96,16 @@ To protect credit resources, we deploy our infrastructure as an ephemeral enviro
   - Added callback event filtering to capture `on_chat_model_stream` events from subagent completions, yielding tokens immediately.
   - Redesigned the React chat interface in `frontend/src/App.jsx` to append chunk tokens contextually in real-time, displaying dynamic badges and collapsible thought blocks.
 
+- **Phase 12: Production Security, Checkpointers & Human-in-the-loop (Completed)**
+  - Provisioned a managed AWS RDS PostgreSQL instance and an AWS Cognito User Pool via Terraform.
+  - Refactored the core checkpointer mechanism in `app/agents/supervisor.py` to utilize `PostgresSaver` backed by connection pools.
+  - Integrated JSON Web Token (JWT) validation middleware in FastAPI endpoints (`app/main.py`) using Cognito public JWKs to enforce secure user isolation.
+  - Exposed Prometheus router metrics `/metrics` to count routing frequencies per specialist node.
+  - Integrated client-side Cognito Signup, Confirm, and Sign In flows in the Vite frontend.
+  - Built interactive approval interrupt overlays enabling lead developers to verify infrastructure commands and resume node execution via `/chat/approve` callback endpoints.
+
 ## Planned Next Phases
 
-- **Phase 12: AWS RDS PostgreSQL Checkpointer backing** — Replace in-memory checkpointer with an external PostgreSQL instance for multi-replica stateless container scale-out.
-- **Phase 13: User Authentication & Multi-Tenant Partitioning** — Introduce Cognito / Auth0 integration to separate state threads per authenticated developer.
-- **Phase 14: Specialist Observability & Logging** — Prometheus + Grafana or LangSmith integration; specialist routing frequency dashboard; Diagnostics tab in React.
-- **Phase 15: Agentic Human-in-the-Loop Actions** — Add approval buttons in the UI for destructive operations (e.g. executing terraform plan / kubectl edits).
+- **Phase 13: EKS Nova Model Billing Tagging & Budget Alerts** — Configure cost allocation tags and configure EKS config tags on Amazon Bedrock requests.
+- **Phase 14: Multi-Region PostgreSQL Replication** — Build read replicas for postgres database to support low-latency global state loads.
+- **Phase 15: LangSmith Observability Integration** — Connect EKS pods to LangSmith trace collection instances to audit agent reasoning loops.

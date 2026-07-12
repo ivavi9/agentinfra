@@ -166,7 +166,7 @@ const renderMessageContent = (content) => {
   return <div className="md-rendered-message">{parseMarkdownText(content)}</div>;
 };
 
-function DashboardContent() {
+function DashboardContent({ token, onLogout }) {
   const [sessionId] = useState(() => {
     let id = sessionStorage.getItem('agent_session_id')
     if (!id) {
@@ -185,13 +185,42 @@ function DashboardContent() {
   const [loading, setLoading] = useState(false)
   const [systemPrompt, setSystemPrompt] = useState('Standard EKS Assistant Profile')
   const [temperature, setTemperature] = useState(0.7)
+  const [metrics, setMetrics] = useState({ infra: 0, code: 0, research: 0, tokens: 0 })
   const chatEndRef = useRef(null)
+
+  const fetchMetrics = async () => {
+    try {
+      const response = await fetch(`${GATEWAY_URL}/metrics`)
+      if (response.ok) {
+        const text = await response.text()
+        
+        // Parse simple prometheus metrics
+        const infraMatch = text.match(/agent_routes_total\{specialist="infra"\} (\d+)/)
+        const codeMatch = text.match(/agent_routes_total\{specialist="code"\} (\d+)/)
+        const researchMatch = text.match(/agent_routes_total\{specialist="research"\} (\d+)/)
+        const tokensMatch = text.match(/llm_token_chunks_total (\d+)/)
+        
+        setMetrics({
+          infra: infraMatch ? parseInt(infraMatch[1], 10) : 0,
+          code: codeMatch ? parseInt(codeMatch[1], 10) : 0,
+          research: researchMatch ? parseInt(researchMatch[1], 10) : 0,
+          tokens: tokensMatch ? parseInt(tokensMatch[1], 10) : 0
+        })
+      }
+    } catch (err) {
+      console.warn('Failed to fetch metrics:', err)
+    }
+  }
 
   // Fetch stateful chat history on mount
   useEffect(() => {
     const loadHistory = async () => {
       try {
-        const response = await fetch(`${GATEWAY_URL}/chat/history?session_id=${sessionId}`)
+        const response = await fetch(`${GATEWAY_URL}/chat/history?session_id=${sessionId}`, {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        })
         if (response.ok) {
           const data = await response.json()
           if (data.history && data.history.length > 0) {
@@ -203,7 +232,14 @@ function DashboardContent() {
       }
     }
     loadHistory()
-  }, [sessionId])
+    fetchMetrics()
+  }, [sessionId, token])
+
+  // Refresh metrics every 8 seconds
+  useEffect(() => {
+    const timer = setInterval(fetchMetrics, 8000)
+    return () => clearInterval(timer)
+  }, [])
 
   // Make dashboard state readable to CopilotKit context
   useCopilotReadable({
@@ -240,6 +276,7 @@ function DashboardContent() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({ prompt: userMessage, session_id: sessionId })
       })
@@ -290,6 +327,16 @@ function DashboardContent() {
                     }
                     return updated
                   })
+                } else if (parsed.type === 'approval_required') {
+                  setMessages((prev) => [
+                    ...prev,
+                    {
+                      role: 'assistant',
+                      type: 'approval_request',
+                      specialist: 'infra',
+                      next_nodes: parsed.next_nodes
+                    }
+                  ])
                 } else if (parsed.type === 'error') {
                   throw new Error(parsed.data)
                 }
@@ -315,6 +362,107 @@ function DashboardContent() {
       })
     } finally {
       setLoading(false)
+      fetchMetrics()
+    }
+  }
+
+  const handleApprovalDecision = async (action) => {
+    setLoading(true)
+    // Remove the approval card from messages to transition cleanly
+    setMessages((prev) => {
+      const updated = [...prev]
+      if (updated.length > 0 && updated[updated.length - 1].type === 'approval_request') {
+        updated.pop()
+      }
+      return updated
+    })
+
+    try {
+      // Add status message showing user decision
+      setMessages((prev) => [
+        ...prev,
+        { role: 'user', content: `[User Approved Action Execution]` },
+        { role: 'assistant', content: '', specialist: 'infra' }
+      ])
+
+      const response = await fetch(`${GATEWAY_URL}/chat/approve`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ session_id: sessionId, action: action })
+      })
+
+      if (!response.ok) {
+        throw new Error(`HTTP error ${response.status}`)
+      }
+
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder('utf-8')
+      let done = false
+      let accumulatedText = ''
+
+      while (!done) {
+        const { value, done: readerDone } = await reader.read()
+        done = readerDone
+        if (value) {
+          const chunkStr = decoder.decode(value, { stream: !done })
+          const lines = chunkStr.split('\n')
+          
+          for (const line of lines) {
+            const trimmed = line.trim()
+            if (trimmed.startsWith('data: ')) {
+              try {
+                const parsed = JSON.parse(trimmed.slice(6))
+                if (parsed.type === 'token' || parsed.type === 'status') {
+                  accumulatedText += parsed.data
+                  setMessages((prev) => {
+                    const updated = [...prev]
+                    if (updated.length > 0) {
+                      updated[updated.length - 1] = {
+                        ...updated[updated.length - 1],
+                        content: accumulatedText
+                      }
+                    }
+                    return updated
+                  })
+                } else if (parsed.type === 'approval_required') {
+                  setMessages((prev) => [
+                    ...prev,
+                    {
+                      role: 'assistant',
+                      type: 'approval_request',
+                      specialist: 'infra',
+                      next_nodes: parsed.next_nodes
+                    }
+                  ])
+                } else if (parsed.type === 'error') {
+                  throw new Error(parsed.data)
+                }
+              } catch (jsonErr) {
+                console.warn('Failed to parse approval chunk JSON:', trimmed, jsonErr)
+              }
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Approval stream error:', err)
+      setMessages((prev) => {
+        const updated = [...prev]
+        if (updated.length > 0) {
+          updated[updated.length - 1] = {
+            role: 'assistant',
+            content: `⚠️ Connection Error: Failed to execute approval response. (Reason: ${err.message})`,
+            specialist: null
+          }
+        }
+        return updated
+      })
+    } finally {
+      setLoading(false)
+      fetchMetrics()
     }
   }
 
@@ -338,9 +486,29 @@ function DashboardContent() {
           </svg>
           <h1 style={{ fontSize: '1.5rem' }}>Antigravity <span className="text-gradient">Workspace</span></h1>
         </div>
-        <div className="status-indicator">
-          <div className="status-dot"></div>
-          <span>Gateway Connected</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+          <div className="status-indicator">
+            <div className="status-dot"></div>
+            <span>EKS Multi-Tenant Secure</span>
+          </div>
+          <button 
+            onClick={onLogout}
+            style={{
+              background: 'rgba(239, 68, 68, 0.1)',
+              border: '1px solid rgba(239, 68, 68, 0.3)',
+              color: '#F87171',
+              padding: '6px 12px',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              fontSize: '0.8rem',
+              fontWeight: '600',
+              transition: 'background 0.2s'
+            }}
+            onMouseOver={(e) => e.target.style.background = 'rgba(239, 68, 68, 0.2)'}
+            onMouseOut={(e) => e.target.style.background = 'rgba(239, 68, 68, 0.1)'}
+          >
+            Sign Out
+          </button>
         </div>
       </header>
 
@@ -362,8 +530,8 @@ function DashboardContent() {
           </div>
 
           <div className="config-item">
-            <span className="config-label">AWS Bedrock Integration</span>
-            <span className="badge" style={{ alignSelf: 'flex-start', color: '#10B981', borderColor: 'rgba(16, 185, 129, 0.2)' }}>Keyless IAM Role</span>
+            <span className="config-label">State Checkpointer</span>
+            <span className="badge" style={{ alignSelf: 'flex-start', color: '#34D399', borderColor: 'rgba(52, 211, 153, 0.2)' }}>RDS PostgreSQL</span>
           </div>
 
           <div className="config-item">
@@ -371,9 +539,27 @@ function DashboardContent() {
             <span className="badge" style={{ alignSelf: 'flex-start', color: '#10B981', borderColor: 'rgba(16, 185, 129, 0.2)' }}>Active ServiceAccount</span>
           </div>
 
-          <div className="config-item">
-            <span className="config-label">Rate Limiter</span>
-            <span className="config-value" style={{ fontSize: '0.85rem' }}>10 requests / min</span>
+          {/* Real-time Prometheus Metrics widget */}
+          <div style={{ padding: '12px 0' }}>
+            <span className="config-label" style={{ marginBottom: '8px', display: 'block' }}>Prometheus Router Metrics</span>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', fontSize: '0.8rem' }}>
+              <div style={{ background: 'rgba(0,0,0,0.2)', padding: '6px 10px', borderRadius: '6px', border: '1px solid var(--border-glass)' }}>
+                <div style={{ color: 'var(--text-secondary)', fontSize: '0.72rem' }}>INFRA ROUTE</div>
+                <div style={{ fontWeight: '700', fontSize: '1.1rem', color: 'var(--accent-cyan)' }}>{metrics.infra}</div>
+              </div>
+              <div style={{ background: 'rgba(0,0,0,0.2)', padding: '6px 10px', borderRadius: '6px', border: '1px solid var(--border-glass)' }}>
+                <div style={{ color: 'var(--text-secondary)', fontSize: '0.72rem' }}>CODE ROUTE</div>
+                <div style={{ fontWeight: '700', fontSize: '1.1rem', color: 'var(--accent-purple-light)' }}>{metrics.code}</div>
+              </div>
+              <div style={{ background: 'rgba(0,0,0,0.2)', padding: '6px 10px', borderRadius: '6px', border: '1px solid var(--border-glass)' }}>
+                <div style={{ color: 'var(--text-secondary)', fontSize: '0.72rem' }}>RESEARCH</div>
+                <div style={{ fontWeight: '700', fontSize: '1.1rem', color: '#F472B6' }}>{metrics.research}</div>
+              </div>
+              <div style={{ background: 'rgba(0,0,0,0.2)', padding: '6px 10px', borderRadius: '6px', border: '1px solid var(--border-glass)' }}>
+                <div style={{ color: 'var(--text-secondary)', fontSize: '0.72rem' }}>TOTAL TOKENS</div>
+                <div style={{ fontWeight: '700', fontSize: '1.1rem', color: '#FBBF24' }}>{metrics.tokens}</div>
+              </div>
+            </div>
           </div>
 
           <hr style={{ border: 'none', borderTop: '1px solid var(--border-glass)', width: '100%', margin: '0' }} />
@@ -476,7 +662,70 @@ function DashboardContent() {
                     </span>
                   )}
                 </div>
-                {msg.role === 'user' ? (
+
+                {msg.type === 'approval_request' ? (
+                  // Custom Human-in-the-loop interactive card
+                  <div style={{
+                    background: 'rgba(245, 158, 11, 0.1)',
+                    border: '1px solid rgba(245, 158, 11, 0.3)',
+                    borderRadius: '8px',
+                    padding: '14px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '12px'
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                      <span style={{ fontSize: '1.4rem' }}>🛡️</span>
+                      <div>
+                        <div style={{ fontWeight: '700', fontSize: '0.9rem', color: '#FBBF24' }}>Infrastructure Security Interrupt</div>
+                        <div style={{ fontSize: '0.78rem', color: 'rgba(243, 244, 246, 0.7)' }}>Execution paused before: <code>{msg.next_nodes?.join(', ')}</code></div>
+                      </div>
+                    </div>
+                    <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', lineHeight: '1.4' }}>
+                      An infrastructure-modifying action was routed to the <strong>EKS Specialist</strong>. Please verify the target cluster changes before approving execution.
+                    </div>
+                    <div style={{ display: 'flex', gap: '10px', marginTop: '4px' }}>
+                      <button 
+                        onClick={() => handleApprovalDecision('approve')}
+                        style={{
+                          flex: 1,
+                          background: 'rgba(16, 185, 129, 0.25)',
+                          border: '1px solid #10B981',
+                          color: '#34D399',
+                          padding: '8px',
+                          borderRadius: '6px',
+                          cursor: 'pointer',
+                          fontWeight: '600',
+                          fontSize: '0.82rem',
+                          transition: 'background 0.2s'
+                        }}
+                        onMouseOver={(e) => e.target.style.background = 'rgba(16, 185, 129, 0.4)'}
+                        onMouseOut={(e) => e.target.style.background = 'rgba(16, 185, 129, 0.25)'}
+                      >
+                        Approve Action
+                      </button>
+                      <button 
+                        onClick={() => handleApprovalDecision('reject')}
+                        style={{
+                          flex: 1,
+                          background: 'rgba(239, 68, 68, 0.2)',
+                          border: '1px solid #EF4444',
+                          color: '#F87171',
+                          padding: '8px',
+                          borderRadius: '6px',
+                          cursor: 'pointer',
+                          fontWeight: '600',
+                          fontSize: '0.82rem',
+                          transition: 'background 0.2s'
+                        }}
+                        onMouseOver={(e) => e.target.style.background = 'rgba(239, 68, 68, 0.35)'}
+                        onMouseOut={(e) => e.target.style.background = 'rgba(239, 68, 68, 0.2)'}
+                      >
+                        Reject & Terminate
+                      </button>
+                    </div>
+                  </div>
+                ) : msg.role === 'user' ? (
                   <div style={{ fontSize: '0.95rem', lineHeight: '1.5', whiteSpace: 'pre-wrap' }}>
                     {msg.content}
                   </div>
@@ -523,7 +772,248 @@ function DashboardContent() {
   )
 }
 
+function AuthScreen({ onLoginSuccess }) {
+  const [authMode, setAuthMode] = useState('login') // 'login', 'signup', 'verify'
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [verifyCode, setVerifyCode] = useState('')
+  const [errorMsg, setErrorMsg] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [verifyEmail, setVerifyEmail] = useState('')
+
+  const handleCognitoRequest = async (target, payload) => {
+    const response = await fetch('https://cognito-idp.us-east-1.amazonaws.com/', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-amz-json-1.1',
+        'X-Amz-Target': `AWSCognitoIdentityProviderService.${target}`
+      },
+      body: JSON.stringify(payload)
+    })
+    const data = await response.json()
+    if (!response.ok) {
+      throw new Error(data.message || 'Operation failed')
+    }
+    return data
+  }
+
+  const onSubmit = async (e) => {
+    e.preventDefault()
+    setLoading(true)
+    setErrorMsg('')
+
+    try {
+      if (authMode === 'login') {
+        const data = await handleCognitoRequest('InitiateAuth', {
+          ClientId: '2o7i5nslm1ob408400dbbs82et',
+          AuthFlow: 'USER_PASSWORD_AUTH',
+          AuthParameters: {
+            USERNAME: email,
+            PASSWORD: password
+          }
+        })
+        const token = data.AuthenticationResult.IdToken
+        onLoginSuccess(token)
+      } else if (authMode === 'signup') {
+        await handleCognitoRequest('SignUp', {
+          ClientId: '2o7i5nslm1ob408400dbbs82et',
+          Username: email,
+          Password: password,
+          UserAttributes: [{ Name: 'email', Value: email }]
+        })
+        setVerifyEmail(email)
+        setAuthMode('verify')
+        setErrorMsg('Sign up successful! Please check your email for a verification code.')
+      } else if (authMode === 'verify') {
+        await handleCognitoRequest('ConfirmSignUp', {
+          ClientId: '2o7i5nslm1ob408400dbbs82et',
+          Username: verifyEmail,
+          ConfirmationCode: verifyCode
+        })
+        setAuthMode('login')
+        setErrorMsg('Email verified! You can now sign in with your password.')
+      }
+    } catch (err) {
+      setErrorMsg(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div style={{
+      minHeight: '100vh',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      background: 'radial-gradient(circle at top left, #1e1b4b 0%, #030712 100%)',
+      fontFamily: 'var(--font-sans)',
+      padding: '20px'
+    }}>
+      <div className="glass-panel animate-slide-up" style={{
+        maxWidth: '420px',
+        width: '100%',
+        padding: '30px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '24px',
+        border: '1px solid rgba(255, 255, 255, 0.08)'
+      }}>
+        {/* Logo */}
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
+          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M12 2L2 22H22L12 2Z" stroke="url(#auth-grad)" strokeWidth="2.5" strokeLinejoin="round"/>
+            <defs>
+              <linearGradient id="auth-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stopColor="#7C3AED" />
+                <stop offset="100%" stopColor="#06B6D4" />
+              </linearGradient>
+            </defs>
+          </svg>
+          <h2 style={{ margin: '8px 0 2px', fontSize: '1.6rem', fontWeight: '700' }}>
+            Antigravity <span className="text-gradient">Console</span>
+          </h2>
+          <p style={{ margin: 0, fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+            {authMode === 'login' && 'Sign in to access secure EKS workspace'}
+            {authMode === 'signup' && 'Create developer account'}
+            {authMode === 'verify' && `Verify email code for ${verifyEmail}`}
+          </p>
+        </div>
+
+        {errorMsg && (
+          <div style={{
+            background: errorMsg.includes('successful') || errorMsg.includes('verified') ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+            border: errorMsg.includes('successful') || errorMsg.includes('verified') ? '1px solid rgba(16, 185, 129, 0.3)' : '1px solid rgba(239, 68, 68, 0.3)',
+            color: errorMsg.includes('successful') || errorMsg.includes('verified') ? '#34D399' : '#F87171',
+            padding: '10px 14px',
+            borderRadius: '6px',
+            fontSize: '0.8rem',
+            lineHeight: '1.4'
+          }}>
+            {errorMsg}
+          </div>
+        )}
+
+        <form onSubmit={onSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          {authMode !== 'verify' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              <label style={{ fontSize: '0.75rem', fontWeight: '600', color: 'var(--text-secondary)' }}>EMAIL ADDRESS</label>
+              <input
+                type="email"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                style={{
+                  background: 'rgba(255, 255, 255, 0.05)',
+                  border: '1px solid var(--border-glass)',
+                  borderRadius: '6px',
+                  padding: '10px 12px',
+                  color: '#fff',
+                  outline: 'none',
+                  fontSize: '0.9rem'
+                }}
+              />
+            </div>
+          )}
+
+          {authMode === 'verify' ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              <label style={{ fontSize: '0.75rem', fontWeight: '600', color: 'var(--text-secondary)' }}>VERIFICATION CODE</label>
+              <input
+                type="text"
+                required
+                placeholder="Enter 6-digit code"
+                value={verifyCode}
+                onChange={(e) => setVerifyCode(e.target.value)}
+                style={{
+                  background: 'rgba(255, 255, 255, 0.05)',
+                  border: '1px solid var(--border-glass)',
+                  borderRadius: '6px',
+                  padding: '10px 12px',
+                  color: '#fff',
+                  outline: 'none',
+                  fontSize: '0.9rem',
+                  textAlign: 'center',
+                  letterSpacing: '4px'
+                }}
+              />
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              <label style={{ fontSize: '0.75rem', fontWeight: '600', color: 'var(--text-secondary)' }}>PASSWORD</label>
+              <input
+                type="password"
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                style={{
+                  background: 'rgba(255, 255, 255, 0.05)',
+                  border: '1px solid var(--border-glass)',
+                  borderRadius: '6px',
+                  padding: '10px 12px',
+                  color: '#fff',
+                  outline: 'none',
+                  fontSize: '0.9rem'
+                }}
+              />
+            </div>
+          )}
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="send-button"
+            style={{
+              padding: '12px',
+              borderRadius: '6px',
+              fontWeight: '700',
+              cursor: 'pointer',
+              marginTop: '8px'
+            }}
+          >
+            {loading ? 'Processing...' : authMode === 'login' ? 'Sign In' : authMode === 'signup' ? 'Create Account' : 'Verify Email'}
+          </button>
+        </form>
+
+        <div style={{ textAlign: 'center', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+          {authMode === 'login' ? (
+            <span>
+              Don't have an account?{' '}
+              <a href="#" onClick={() => { setAuthMode('signup'); setErrorMsg(''); }} style={{ color: 'var(--accent-cyan)', textDecoration: 'none', fontWeight: '600' }}>
+                Sign Up
+              </a>
+            </span>
+          ) : (
+            <span>
+              Already have an account?{' '}
+              <a href="#" onClick={() => { setAuthMode('login'); setErrorMsg(''); }} style={{ color: 'var(--accent-purple-light)', textDecoration: 'none', fontWeight: '600' }}>
+                Sign In
+              </a>
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function App() {
+  const [token, setToken] = useState(() => localStorage.getItem('agent_jwt_token') || null)
+
+  const handleLoginSuccess = (newToken) => {
+    localStorage.setItem('agent_jwt_token', newToken)
+    setToken(newToken)
+  }
+
+  const handleLogout = () => {
+    localStorage.removeItem('agent_jwt_token')
+    setToken(null)
+  }
+
+  if (!token) {
+    return <AuthScreen onLoginSuccess={handleLoginSuccess} />
+  }
+
   return (
     <CopilotKit 
       runtimeUrl={`${GATEWAY_URL}/v1/copilotkit`}
@@ -537,7 +1027,7 @@ function App() {
         }
       }}
     >
-      <DashboardContent />
+      <DashboardContent token={token} onLogout={handleLogout} />
     </CopilotKit>
   )
 }

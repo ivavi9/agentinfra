@@ -1,11 +1,11 @@
 # Session Handoff & State Tracker
 
 ## Current Session Status
-- **Phase**: Phase 11 — Real-Time Streaming & Stateful Memory (Complete)
-- **AWS Infrastructure Status**: 🟢 Active and fully running in EKS cluster.
+- **Phase**: Phase 12 — Cognito Security, Postgres Checkpointing & Human-in-the-loop (Complete)
+- **AWS Infrastructure Status**: 🟢 Active and fully running in EKS cluster, backed by RDS PostgreSQL and Cognito.
 - **Core App Status**: Code complete, tested, and pushed to ECR.
-- **Security & Gateway Status**: Keyless SA OIDC tokens, Vault policies, CORS, and Rate Limits fully configured and active.
-- **Frontend Status**: Vite React dashboard with real-time SSE token streaming, markdown renderer, specialist badges, and collapsible reasoning chains.
+- **Security & Gateway Status**: Keyless SA OIDC tokens, Vault policies, CORS, Rate Limits, and Cognito JWT validation fully configured and active.
+- **Frontend Status**: Vite React dashboard with native Cognito auth forms, real-time metrics widgets, and interactive human-in-the-loop action approval controls.
 
 ## Accomplishments (Cumulative)
 1. Drafted poC architecture spec with SOLID principles & security governance rules.
@@ -27,9 +27,15 @@
 17. Propagated `RunnableConfig` context throughout the supervisor and specialist subagent graphs.
 18. Implemented FastAPI SSE streaming endpoints (`POST /chat/stream`) and history endpoints (`GET /chat/history`).
 19. Rebuilt the frontend chat architecture to handle chunked real-time token stream merges.
+20. Provisioned AWS RDS PostgreSQL database and Cognito User Pool via Terraform ([rds.tf](file:///Users/avikaushik/agentinfra/infra/terraform/rds.tf), [cognito.tf](file:///Users/avikaushik/agentinfra/infra/terraform/cognito.tf)).
+21. Refactored the Supervisor graph persistence to use SQL connection pools and `PostgresSaver` ([supervisor.py](file:///Users/avikaushik/agentinfra/app/agents/supervisor.py)).
+22. Enabled multi-tenant conversation isolation by validating Cognito JWTs in FastAPI endpoints ([main.py](file:///Users/avikaushik/agentinfra/app/main.py)).
+23. Added a Prometheus `/metrics` router tracking specialist routing frequency, and an approval callback handler `/chat/approve`.
+24. Integrated client-side Cognito authentication (Signup, Verification, Sign In, Sign Out) natively in React UI ([App.jsx](file:///Users/avikaushik/agentinfra/frontend/src/App.jsx)).
+25. Embedded interactive approval card controls allowing real-time intervention on graph execution.
 
 ## Next Steps (Technical & Business Roadmap)
-- [ ] Upgrade MemorySaver to AWS RDS PostgreSQL Checkpointer backing for multi-replica stateful persistence.
-- [ ] Add user authentication layers (e.g. AWS Cognito / Auth0) for multi-tenant workspace partitioning.
-- [ ] Implement agentic human-in-the-loop approvals in the UI for destructive infrastructure changes.
 - [ ] Add cost allocation tagging and budget alerts on Bedrock Nova model usage.
+- [ ] Configure automatic database backup policies for the persistent RDS state tables.
+- [ ] Set up end-to-end trace collection using LangSmith inside EKS.
+- [ ] Build Grafana dashboards displaying specialist routing load over Prometheus `/metrics`.

@@ -37,3 +37,39 @@ output "bedrock_secret_access_key" {
   value     = aws_iam_access_key.bedrock_user_key.secret
   sensitive = true
 }
+
+output "rds_endpoint" {
+  value       = aws_db_instance.postgres.endpoint
+  description = "The connection endpoint for the RDS PostgreSQL checkpointer"
+}
+
+output "rds_db_name" {
+  value       = aws_db_instance.postgres.db_name
+  description = "The name of the initialized checkpointer database"
+}
+
+output "rds_username" {
+  value       = aws_db_instance.postgres.username
+  description = "The admin username for RDS database access"
+}
+
+output "rds_password" {
+  value       = aws_db_instance.postgres.password
+  sensitive   = true
+  description = "The admin password for RDS database access"
+}
+
+output "cognito_user_pool_id" {
+  value       = aws_cognito_user_pool.user_pool.id
+  description = "The AWS Cognito User Pool ID"
+}
+
+output "cognito_client_id" {
+  value       = aws_cognito_user_pool_client.client.id
+  description = "The AWS Cognito Client Application ID"
+}
+
+output "cognito_endpoint" {
+  value       = "https://cognito-idp.${var.aws_region}.amazonaws.com/${aws_cognito_user_pool.user_pool.id}"
+  description = "The issuer endpoint URL for Cognito JWT token validation"
+}

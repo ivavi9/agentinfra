@@ -5,6 +5,8 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.postgres import PostgresSaver
+from psycopg_pool import ConnectionPool
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 
@@ -52,7 +54,7 @@ class SupervisorAgent:
         "RESEARCH": "research",
     }
 
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, db_config: Optional[dict] = None):
         os.environ["_AGENT_API_KEY"] = api_key
 
         gateway_url = os.getenv(
@@ -96,13 +98,13 @@ class SupervisorAgent:
         
         # Add conditional edges out of route node
         builder.add_conditional_edges(
-            "route",
-            self._route_decision,
-            {
-                "INFRA": "infra",
-                "CODE": "code",
-                "RESEARCH": "research",
-            }
+          "route",
+          self._route_decision,
+          {
+              "INFRA": "infra",
+              "CODE": "code",
+              "RESEARCH": "research",
+          }
         )
         
         # Connect specialists to the end point
@@ -110,9 +112,24 @@ class SupervisorAgent:
         builder.add_edge("code", END)
         builder.add_edge("research", END)
         
-        self.memory = MemorySaver()
-        self.graph = builder.compile(checkpointer=self.memory)
-        logger.info("SupervisorAgent successfully compiled with MemorySaver checkpointer")
+        # Configure RDS PostgreSQL checkpointer with in-memory fallback
+        if db_config and db_config.get("db_host"):
+            try:
+                db_url = f"postgresql://{db_config['db_user']}:{db_config['db_password']}@{db_config['db_host']}:{db_config['db_port']}/{db_config['db_name']}"
+                logger.info(f"Connecting to Postgres checkpointer: host={db_config['db_host']}, user={db_config['db_user']}")
+                self.pool = ConnectionPool(conninfo=db_url, max_size=10, open=True)
+                self.memory = PostgresSaver(self.pool)
+                self.memory.setup()
+                logger.info("SupervisorAgent successfully compiled with PostgresSaver checkpointer")
+            except Exception as e:
+                logger.error(f"Failed to initialize PostgresSaver checkpointer: {e}. Falling back to MemorySaver.")
+                self.memory = MemorySaver()
+        else:
+            logger.info("Initializing SupervisorAgent with local MemorySaver checkpointer")
+            self.memory = MemorySaver()
+
+        # Set human-in-the-loop interrupts before EKS infrastructure specialist runs
+        self.graph = builder.compile(checkpointer=self.memory, interrupt_before=["infra"])
 
     def _route(self, user_prompt: str) -> str:
         """Uses the router LLM to classify intent and select a specialist."""
@@ -127,10 +144,20 @@ class SupervisorAgent:
         for key in self.SPECIALIST_MAP:
             if key in decision:
                 logger.info(f"Supervisor routing '{user_prompt[:60]}' → {key}")
+                try:
+                    from metrics import increment_route
+                    increment_route(key)
+                except ImportError:
+                    pass
                 return key
 
         # Default fallback
         logger.warning(f"Could not classify intent, falling back to RESEARCH. Decision: {decision!r}")
+        try:
+            from metrics import increment_route
+            increment_route("RESEARCH")
+        except ImportError:
+            pass
         return "RESEARCH"
 
     def _route_node(self, state: SupervisorState) -> dict:
@@ -162,26 +189,28 @@ class SupervisorAgent:
         response = await self.research_agent.arun(state["messages"], config)
         return {"messages": [AIMessage(content=response)]}
 
-    def run(self, user_prompt: str, session_id: str = "default") -> tuple:
+    def run(self, user_prompt: Optional[str], session_id: str = "default") -> tuple:
         """
         Runs the state graph synchronously for compatibility.
         """
         config = {"configurable": {"thread_id": session_id}}
+        input_data = {"messages": [HumanMessage(content=user_prompt)]} if user_prompt is not None else None
         result = self.graph.invoke(
-            {"messages": [HumanMessage(content=user_prompt)]},
+            input_data,
             config=config
         )
         last_msg = result["messages"][-1]
         return last_msg.content, result.get("specialist", "RESEARCH")
 
-    async def astream(self, user_prompt: str, session_id: str = "default"):
+    async def astream(self, user_prompt: Optional[str], session_id: str = "default"):
         """
         Asynchronously streams LLM token events and specialist routing choices.
         """
         config = {"configurable": {"thread_id": session_id}}
+        input_data = {"messages": [HumanMessage(content=user_prompt)]} if user_prompt is not None else None
         
         async for event in self.graph.astream_events(
-            {"messages": [HumanMessage(content=user_prompt)]},
+            input_data,
             config=config,
             version="v2"
         ):
@@ -201,6 +230,11 @@ class SupervisorAgent:
             elif event["event"] == "on_chat_model_stream":
                 chunk = event["data"].get("chunk")
                 if chunk and hasattr(chunk, "content") and chunk.content:
+                    try:
+                        from metrics import increment_tokens
+                        increment_tokens(1)
+                    except ImportError:
+                        pass
                     yield {
                         "type": "token",
                         "data": chunk.content

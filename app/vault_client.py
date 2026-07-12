@@ -30,6 +30,11 @@ class VaultSecretsManager:
 
     def get_gemini_api_key(self) -> str:
         """Retrieves the Gemini API Key from Vault kv engine."""
+        secrets = self.get_secrets()
+        return secrets["api_key"]
+
+    def get_secrets(self) -> dict:
+        """Retrieves all credentials stored in the Vault 'gemini' secret."""
         # For local development / manual execution fallback
         dev_token = os.getenv("VAULT_DEV_TOKEN")
         if dev_token:
@@ -43,6 +48,5 @@ class VaultSecretsManager:
             raise_on_deleted_version=True
         )
         
-        # Extract secret data
-        secret_data = secret_response["data"]["data"]
-        return secret_data["api_key"]
+        # Extract and return secret data
+        return secret_response["data"]["data"]

@@ -1,10 +1,20 @@
 import logging
-from fastapi import FastAPI, HTTPException
+import os
+import json
+import jwt
+import httpx
+from fastapi import FastAPI, HTTPException, Depends, Header, Response
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional, List
 from vault_client import VaultSecretsManager
 from agent import LangGraphAgent
 from langchain_core.messages import HumanMessage, AIMessage
+
+class ApproveRequest(BaseModel):
+    session_id: str
+    action: str # "approve" or "reject"
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("agent-core")
@@ -14,6 +24,8 @@ app = FastAPI(title="AgentCore Service", version="1.0.0")
 # Global instances initialized on startup
 secrets_manager = VaultSecretsManager()
 agent_orchestrator = None
+COGNITO_JWKS = None
+COGNITO_ISSUER = None
 
 class ChatRequest(BaseModel):
     prompt: str
@@ -23,22 +35,100 @@ class ChatResponse(BaseModel):
     response: str
     specialist: Optional[str] = None
 
+async def load_jwks(issuer_url: str):
+    global COGNITO_JWKS, COGNITO_ISSUER
+    try:
+        COGNITO_ISSUER = issuer_url
+        jwks_url = f"{issuer_url}/.well-known/jwks.json"
+        logger.info(f"Loading Cognito JWKS from: {jwks_url}...")
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(jwks_url)
+            if resp.status_code == 200:
+                COGNITO_JWKS = resp.json()
+                logger.info("Successfully cached Cognito JWKS keys!")
+            else:
+                logger.error(f"Failed to fetch Cognito JWKS: status={resp.status_code}")
+    except Exception as e:
+        logger.error(f"Error loading JWKS keys: {e}")
+
+def verify_token(authorization: Optional[str] = Header(None)) -> str:
+    """Verifies incoming JWT Cognito token and extracts user_id (sub)."""
+    if not authorization:
+        # Fallback to default user for curl / dev queries
+        return "default_user"
+    
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Invalid authorization header format")
+        
+    token = authorization.split(" ")[1]
+    
+    if not COGNITO_JWKS:
+        logger.warning("JWKS not loaded. Bypassing verification (debug mode).")
+        return "default_user"
+        
+    try:
+        # Decode header to find key ID (kid)
+        unverified_header = jwt.get_unverified_header(token)
+        kid = unverified_header.get("kid")
+        if not kid:
+            raise HTTPException(status_code=401, detail="Header missing kid claim")
+            
+        # Find matching key in JWKS
+        rsa_key = None
+        for key in COGNITO_JWKS.get("keys", []):
+            if key["kid"] == kid:
+                rsa_key = {
+                    "kty": key["kty"],
+                    "kid": key["kid"],
+                    "use": key["use"],
+                    "alg": key["alg"],
+                    "n": key["n"],
+                    "e": key["e"]
+                }
+                break
+                
+        if not rsa_key:
+            raise HTTPException(status_code=401, detail="Signing key not found in JWKS")
+            
+        # Construct public key and verify signature
+        public_key = jwt.algorithms.RSAAlgorithm.from_jwk(rsa_key)
+        payload = jwt.decode(
+            token,
+            public_key,
+            algorithms=["RS256"],
+            issuer=COGNITO_ISSUER,
+            options={"verify_aud": False}
+        )
+        
+        # Return sub (user ID)
+        return payload.get("sub") or "default_user"
+        
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token has expired")
+    except Exception as e:
+        logger.error(f"JWT Verification failed: {e}")
+        raise HTTPException(status_code=401, detail=f"JWT invalid: {str(e)}")
+
 @app.on_event("startup")
 async def startup_event():
     global agent_orchestrator
     logger.info("Initializing AgentCore backend...")
     try:
-        # Retrieve API key keylessly from HashiCorp Vault
-        api_key = secrets_manager.get_gemini_api_key()
+        # Retrieve all secrets keylessly from HashiCorp Vault
+        secrets = secrets_manager.get_secrets()
+        api_key = secrets["api_key"]
         logger.info("Successfully retrieved Gemini API key from Vault!")
         
-        # Initialize LangGraph client with retrieved key
-        agent_orchestrator = LangGraphAgent(api_key=api_key)
+        # Pre-load JWKS keys for Cognito validation
+        cognito_url = secrets.get("cognito_endpoint")
+        if cognito_url:
+            await load_jwks(cognito_url)
+        
+        # Initialize LangGraph client with retrieved key and DB configuration
+        agent_orchestrator = LangGraphAgent(api_key=api_key, db_config=secrets)
         logger.info("LangGraph agent compiled and ready!")
     except Exception as e:
         logger.error(f"FATAL: Failed to initialize security/LLM keys: {str(e)}")
-        # We don't exit(1) immediately to allow debug shell access to container,
-        # but readiness check will fail.
 
 @app.get("/health")
 def health_check():
@@ -47,53 +137,104 @@ def health_check():
     return {"status": "healthy", "vault": "connected"}
 
 @app.post("/chat", response_model=ChatResponse)
-async def chat_endpoint(request: ChatRequest):
+async def chat_endpoint(request: ChatRequest, user_id: str = Depends(verify_token)):
     if agent_orchestrator is None:
         raise HTTPException(status_code=503, detail="Agent logic not initialized")
     
     try:
         session_id = request.session_id or "default"
-        logger.info(f"Received prompt for session {session_id}: '{request.prompt[:30]}...'")
+        thread_id = f"{user_id}:{session_id}"
+        logger.info(f"Received prompt for user {user_id}, session {session_id} -> thread {thread_id}: '{request.prompt[:30]}...'")
         response_text, specialist_key = agent_orchestrator.run(
             user_prompt=request.prompt,
-            session_id=session_id
+            session_id=thread_id
         )
         return ChatResponse(response=response_text, specialist=specialist_key)
     except Exception as e:
         logger.error(f"Error during agent runtime execution: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Agent Error: {str(e)}")
 
-from fastapi.responses import StreamingResponse
-import json
-
 @app.post("/chat/stream")
-async def chat_stream_endpoint(request: ChatRequest):
+async def chat_stream_endpoint(request: ChatRequest, user_id: str = Depends(verify_token)):
     if agent_orchestrator is None:
         raise HTTPException(status_code=503, detail="Agent logic not initialized")
     
     session_id = request.session_id or "default"
-    logger.info(f"Received stream prompt for session {session_id}: '{request.prompt[:30]}...'")
+    thread_id = f"{user_id}:{session_id}"
+    logger.info(f"Received stream prompt for user {user_id}, session {session_id} -> thread {thread_id}: '{request.prompt[:30]}...'")
     
     async def sse_generator():
         try:
             async for event in agent_orchestrator.astream(
                 user_prompt=request.prompt,
-                session_id=session_id
+                session_id=thread_id
             ):
                 yield f"data: {json.dumps(event)}\n\n"
+            
+            # Check if graph has paused execution at an interrupt node
+            config = {"configurable": {"thread_id": thread_id}}
+            state = agent_orchestrator.graph.get_state(config)
+            if state and state.next:
+                logger.info(f"Graph execution paused at interrupt node: {state.next}. Requiring user approval.")
+                yield f"data: {json.dumps({'type': 'approval_required', 'next_nodes': list(state.next)})}\n\n"
         except Exception as e:
             logger.error(f"Error in stream generation: {str(e)}")
             yield f"data: {json.dumps({'type': 'error', 'data': str(e)})}\n\n"
             
     return StreamingResponse(sse_generator(), media_type="text/event-stream")
 
+@app.post("/chat/approve")
+async def chat_approve_endpoint(request: ApproveRequest, user_id: str = Depends(verify_token)):
+    if agent_orchestrator is None:
+        raise HTTPException(status_code=503, detail="Agent logic not initialized")
+    
+    thread_id = f"{user_id}:{request.session_id}"
+    logger.info(f"Received approval response for user {user_id}, session {request.session_id} -> action: {request.action}")
+    
+    if request.action == "reject":
+        # Cancel the pending run by updating state to end
+        config = {"configurable": {"thread_id": thread_id}}
+        agent_orchestrator.graph.update_state(config, None, as_node="__end__")
+        
+        async def cancel_generator():
+            yield f"data: {json.dumps({'type': 'status', 'data': 'Action execution cancelled by user.'})}\n\n"
+        return StreamingResponse(cancel_generator(), media_type="text/event-stream")
+        
+    # If approved, resume the graph!
+    async def sse_generator():
+        try:
+            # Pass None as prompt to resume graph from interrupt
+            async for event in agent_orchestrator.astream(
+                user_prompt=None,
+                session_id=thread_id
+            ):
+                yield f"data: {json.dumps(event)}\n\n"
+                
+            # After resume, check if there are further interrupts
+            config = {"configurable": {"thread_id": thread_id}}
+            state = agent_orchestrator.graph.get_state(config)
+            if state and state.next:
+                yield f"data: {json.dumps({'type': 'approval_required', 'next_nodes': list(state.next)})}\n\n"
+        except Exception as e:
+            logger.error(f"Error resuming graph from interrupt: {str(e)}")
+            yield f"data: {json.dumps({'type': 'error', 'data': str(e)})}\n\n"
+            
+    return StreamingResponse(sse_generator(), media_type="text/event-stream")
+
+@app.get("/metrics")
+def metrics_endpoint():
+    from metrics import get_prometheus_metrics
+    return Response(content=get_prometheus_metrics(), media_type="text/plain; version=0.0.4")
+
 @app.get("/chat/history")
-def get_chat_history(session_id: str = "default"):
+def get_chat_history(session_id: str = "default", user_id: str = Depends(verify_token)):
     if agent_orchestrator is None:
         raise HTTPException(status_code=503, detail="Agent logic not initialized")
     
     try:
-        config = {"configurable": {"thread_id": session_id}}
+        thread_id = f"{user_id}:{session_id}"
+        logger.info(f"Retrieving stateful history for thread: {thread_id}")
+        config = {"configurable": {"thread_id": thread_id}}
         state = agent_orchestrator.graph.get_state(config)
         
         history = []
@@ -102,8 +243,6 @@ def get_chat_history(session_id: str = "default"):
                 if isinstance(msg, HumanMessage) or (hasattr(msg, "type") and msg.type == "human"):
                     history.append({"role": "user", "content": msg.content})
                 elif isinstance(msg, AIMessage) or (hasattr(msg, "type") and msg.type == "ai"):
-                    # We can store a specialist tag in the response message if desired,
-                    # but standard content representation is cleaner.
                     history.append({"role": "assistant", "content": msg.content})
         return {"history": history}
     except Exception as e:
