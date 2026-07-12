@@ -13,10 +13,14 @@ graph TB
     %% External Users
     Developer["🧑‍💻 Developer / User\n(Web Browser)"]
 
-    subgraph AWS ["☁️ Amazon Web Services (EKS Cluster)"]
+    subgraph IdentityProvider ["🔐 Identity Management"]
+        Cognito["🛡️ AWS Cognito User Pool\n(Multi-Tenant Auth)"]
+    end
+
+    subgraph AWS ["☁️ Amazon Web Services (EKS Cluster & Services)"]
         %% Ingress Layer
         subgraph IngressLayer ["🚦 API Gateway & Ingress"]
-            Kong["🦍 Kong API Gateway\n(Rate limiting, CORS, Routing)"]
+            Kong["🦍 Kong API Gateway\n(Rate limiting, CORS, JWT Auth)"]
             KongAI["🧠 Kong AI Proxy Ingress\n(Unified OpenAI-to-Bedrock Route)"]
         end
 
@@ -37,6 +41,9 @@ graph TB
 
         %% Security Pod
         Vault["🔒 HashiCorp Vault (Dev Mode)\n(Secrets Storage)"]
+        
+        %% Database State
+        RDS["🐘 Amazon RDS PostgreSQL\n(Stateless Checkpointer Store)"]
     end
 
     %% External Foundation Models
@@ -46,10 +53,12 @@ graph TB
 
     %% Connections
     Developer -->|Loads Dashboard| ViteUI
-    Developer -->|Executes Prompt /chat| Kong
+    Developer -->|Authenticates| Cognito
+    ViteUI -->|Attaches Bearer JWT| Kong
     Kong -->|Proxies request| FastAPI
-    FastAPI -->|Extracts Gemini key| Vault
+    FastAPI -->|Extracts secrets| Vault
     Vault -.->|Keyless SA Token OIDC Auth| FastAPI
+    FastAPI -->|Saves state pool| RDS
     FastAPI -->|Orchestrates query| Supervisor
     
     Supervisor -->|Classifies & dispatches| InfraAgent
@@ -79,6 +88,8 @@ graph TB
     style ResearchAgent fill:#fdf2f8,stroke:#db2777,stroke-width:1px,color:#9d174d;
     style NovaLite fill:#f8fafc,stroke:#475569,stroke-width:1.5px,color:#1e293b;
     style Developer fill:#f8fafc,stroke:#475569,stroke-width:1.5px,color:#1e293b;
+    style Cognito fill:#fee2e2,stroke:#f87171,stroke-width:1.5px,color:#7f1d1d;
+    style RDS fill:#eff6ff,stroke:#3b82f6,stroke-width:1.5px,color:#1e3a8a;
 ```
 
 ---
@@ -107,27 +118,31 @@ graph TB
 * **Context**: Waiting for long multi-agent tool loops to complete before returning text degrades the user experience.
 * **Decision**: We replaced standard REST endpoints with a FastAPI asynchronous Server-Sent Events (SSE) generator (`/chat/stream`). We propagated `RunnableConfig` parameters through the supervisor and specialist subgraphs to bind execution to LangGraph's stateful `MemorySaver` checkpointer. The React UI parses SSE chunk updates dynamically, appending tokens to the active message box in real-time.
 
+### 6. Production-Grade Persistence (RDS PostgreSQL Checkpointer)
+* **Context**: Ephemeral, single-replica checkpointers (`MemorySaver`) drop state history when pods scale or restart.
+* **Decision**: Refactored the supervisor thread checkpointer to utilize `PostgresSaver` backed by a managed AWS RDS PostgreSQL database, maintaining absolute chat history persistence across microservice restarts.
+
+### 7. Multi-Tenant JWT Authorization Gating (Cognito User Pools)
+* **Context**: A shared endpoint without user context permits developers to inspect or override other tenants' active threads.
+* **Decision**: Implemented client-side Cognito authentication and FastAPI JWT validation middleware. The backend extracts the verified user `sub` token claim, partitioning SQL state checkpoints by user identity.
+
 ---
 
 ## 🗺️ Product & Engineering Roadmap
 
-The following four key upgrades are planned to transition the prototype to a production-grade multi-tenant workspace:
+The key upgrades to transition the prototype to a production-grade multi-tenant workspace have been fully implemented:
 
-### 1. Persistent Thread Checkpointer (AWS RDS PostgreSQL)
-* **Goal**: Decouple session memory from pod memory to allow horizontal autoscaling of stateless containers.
-* **Implementation**: Deploy an RDS PostgreSQL instance via Terraform. Replace the local in-memory `MemorySaver` checkpointer with `PostgresSaver` connection pools in the supervisor graph.
+### 1. Persistent Thread Checkpointer (AWS RDS PostgreSQL) [COMPLETED]
+* **Implementation**: Provisioned RDS PostgreSQL database using Terraform (`rds.tf`) and updated `supervisor.py` to store graph memory inside a SQL connection pool using `PostgresSaver`.
 
-### 2. User Authentication & Multi-Tenancy (AWS Cognito / Auth0)
-* **Goal**: Secure agent workspaces and partition thread histories contextually per developer identity.
-* **Implementation**: Setup a Cognito User Pool, enforce JWT validation at the Kong Gateway Ingress level using the `jwt` plugin, and capture verified `user_id` context to partition database records.
+### 2. User Authentication & Multi-Tenancy (AWS Cognito) [COMPLETED]
+* **Implementation**: Setup a Cognito User Pool using Terraform (`cognito.tf`), validated JWT signatures in FastAPI middleware using JWK public keys (`main.py`), and partitioned checkpointer states by user ID.
 
-### 3. Specialist Analytics & Observability (Grafana / LangSmith)
-* **Goal**: Monitor LLM token costs, track specialist routing accuracy, and measure tool latency distributions.
-* **Implementation**: Hook Prometheus metrics targets into the FastAPI middleware to export routing gauges, and stream graph traces directly to LangSmith via OIDC-secured credential secrets.
+### 3. Specialist Analytics & Observability (Prometheus Metrics) [COMPLETED]
+* **Implementation**: Integrated a Prometheus `/metrics` handler exporting specialist routing statistics (`agent_routes_total`) and token volumes, rendered in real-time sidebar widgets on the dashboard.
 
-### 4. Human-in-the-Loop Infrastructure Approvals
-* **Goal**: Enforce safety boundaries on destructive operations (e.g. running Terraform or scaling deployments).
-* **Implementation**: Leverage LangGraph's `interrupt_before` capability. Halt graph execution at write-action nodes, emit an approval event to the frontend, and resume execution only after a developer clicks "Approve" inside the chat card.
+### 4. Human-in-the-Loop Infrastructure Approvals [COMPLETED]
+* **Implementation**: Leveraged LangGraph interrupts to halt graph execution on destructive nodes, rendering Approve/Reject card interfaces in the React UI, and resumed execution through the `/chat/approve` endpoint.
 
 ---
 
