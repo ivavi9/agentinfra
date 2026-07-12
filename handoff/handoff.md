@@ -1,11 +1,11 @@
 # Session Handoff & State Tracker
 
 ## Current Session Status
-- **Phase**: Phase 12 — Cognito Security, Postgres Checkpointing & Human-in-the-loop (Complete)
-- **AWS Infrastructure Status**: 🟢 Active and fully running in EKS cluster, backed by RDS PostgreSQL and Cognito.
-- **Core App Status**: Code complete, tested, and pushed to ECR.
-- **Security & Gateway Status**: Keyless SA OIDC tokens, Vault policies, CORS, Rate Limits, and Cognito JWT validation fully configured and active.
-- **Frontend Status**: Vite React dashboard with native Cognito auth forms, real-time metrics widgets, and interactive human-in-the-loop action approval controls.
+- **Phase**: Phase 13 — Databricks Ingest & Ingestion Automation (Complete)
+- **AWS Infrastructure Status**: 🟢 Idle (All AWS resources successfully destroyed via `make teardown`; 0 active charges accruing).
+- **Core App Status**: Code complete, mock unit tested.
+- **Security & Gateway Status**: Keyless SA OIDC tokens, Vault policies, CORS, Rate Limits, and Cognito JWT validation fully configured.
+- **Frontend Status**: Vite React dashboard updated with a new "Databricks Ingest" workspace tab, featuring split input panels, interactive Source-to-Target mapping tables, and a Databricks Asset Bundle explorer.
 
 ## Accomplishments (Cumulative)
 1. Drafted poC architecture spec with SOLID principles & security governance rules.
@@ -27,12 +27,17 @@
 17. Propagated `RunnableConfig` context throughout the supervisor and specialist subagent graphs.
 18. Implemented FastAPI SSE streaming endpoints (`POST /chat/stream`) and history endpoints (`GET /chat/history`).
 19. Rebuilt the frontend chat architecture to handle chunked real-time token stream merges.
-20. Provisioned AWS RDS PostgreSQL database and Cognito User Pool via Terraform ([rds.tf](file:///Users/avikaushik/agentinfra/infra/terraform/rds.tf), [cognito.tf](file:///Users/avikaushik/agentinfra/infra/terraform/cognito.tf)).
-21. Refactored the Supervisor graph persistence to use SQL connection pools and `PostgresSaver` ([supervisor.py](file:///Users/avikaushik/agentinfra/app/agents/supervisor.py)).
-22. Enabled multi-tenant conversation isolation by validating Cognito JWTs in FastAPI endpoints ([main.py](file:///Users/avikaushik/agentinfra/app/main.py)).
+20. Provisioned AWS RDS PostgreSQL database and Cognito User Pool via Terraform.
+21. Refactored the Supervisor graph persistence to use SQL connection pools and `PostgresSaver`.
+22. Enable multi-tenant conversation isolation by validating Cognito JWTs in FastAPI endpoints.
 23. Added a Prometheus `/metrics` router tracking specialist routing frequency, and an approval callback handler `/chat/approve`.
-24. Integrated client-side Cognito authentication (Signup, Verification, Sign In, Sign Out) natively in React UI ([App.jsx](file:///Users/avikaushik/agentinfra/frontend/src/App.jsx)).
+24. Integrated client-side Cognito authentication (Signup, Verification, Sign In, Sign Out) natively in React UI.
 25. Embedded interactive approval card controls allowing real-time intervention on graph execution.
+26. Designed and built five pipeline automation agents: Business Analyst (`BAAnalystAgent`), Data Profiler (`DataProfilerAgent`), Silver Model Conformer (`SilverModelAgent`), STM Mapper (`STMMappingAgent`), and DAB Generator (`DABGeneratorAgent`).
+27. Implemented the `DatabricksPipelineGraph` state graph in `app/agents/supervisor.py` with human-in-the-loop checkpoints (`interrupt_before=["dab_generator"]`).
+28. Added REST API routes `/pipeline/analyse` and `/pipeline/approve` in `app/main.py` to orchestrate multi-step pipeline compile runs.
+29. Designed the "Databricks Ingest" tab in the React frontend featuring editable mapping tables, code viewers, and state timeline widgets.
+30. Verified compilation logic, interrupts, and target schemas via local mock unit testing in `scratch/test_pipeline_compilation.py`.
 
 ## Next Steps (Technical & Business Roadmap)
 - [ ] Add cost allocation tagging and budget alerts on Bedrock Nova model usage.

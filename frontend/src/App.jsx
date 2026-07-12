@@ -188,6 +188,125 @@ function DashboardContent({ token, onLogout }) {
   const [metrics, setMetrics] = useState({ infra: 0, code: 0, research: 0, tokens: 0 })
   const chatEndRef = useRef(null)
 
+  // Pipeline Ingestion Automation states
+  const [activeTab, setActiveTab] = useState('chat') // 'chat', 'pipeline'
+  const [brdText, setBrdText] = useState(`# Value Stream: Retail Bank Transaction Ingestion
+Source System: CORE_BANK_DB
+SLA Latency: Hourly
+Estimated Volume: 150000 events/day
+
+Entities:
+- Customer:
+  * customer_id (PK)
+  * first_name
+  * last_name
+  * email
+  * date_of_birth
+- Transaction:
+  * transaction_id (PK)
+  * account_id
+  * amount
+  * transaction_date
+`)
+  const [pipelineLoading, setPipelineLoading] = useState(false)
+  const [pipelineStatus, setPipelineStatus] = useState('')
+  const [pipelineError, setPipelineError] = useState('')
+  const [mappingMatrix, setMappingMatrix] = useState([])
+  const [generatedFiles, setGeneratedFiles] = useState({})
+  const [selectedFileTab, setSelectedFileTab] = useState('')
+  const [pipelineStateStep, setPipelineStateStep] = useState(0) // 0: input, 1: mapping approval, 2: bundle generated
+
+  const handleAnalysePipeline = async () => {
+    setPipelineLoading(true)
+    setPipelineError('')
+    setPipelineStateStep(1)
+    setPipelineStatus('Parsing BRD Value Stream & Mapping Schemas...')
+    
+    try {
+      const response = await fetch(`${GATEWAY_URL}/pipeline/analyse`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ brd_document: brdText, session_id: sessionId })
+      })
+      
+      const data = await response.json()
+      if (!response.ok) {
+        throw new Error(data.detail || 'Analysis request failed.')
+      }
+      
+      if (data.error) {
+        throw new Error(data.error)
+      }
+      
+      setMappingMatrix(data.mapping_matrix)
+      setPipelineStatus('Awaiting Source-to-Target mapping approval...')
+    } catch (err) {
+      setPipelineError(err.message)
+      setPipelineStateStep(0)
+    } finally {
+      setPipelineLoading(false)
+    }
+  }
+
+  const handleApprovePipeline = async () => {
+    setPipelineLoading(true)
+    setPipelineError('')
+    setPipelineStatus('Compiling Databricks Asset Bundle (DAB) files...')
+    
+    try {
+      const response = await fetch(`${GATEWAY_URL}/pipeline/approve`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ session_id: sessionId, mapping_matrix: mappingMatrix })
+      })
+      
+      const data = await response.json()
+      if (!response.ok) {
+        throw new Error(data.detail || 'Approve request failed.')
+      }
+      
+      if (data.error) {
+        throw new Error(data.error)
+      }
+      
+      setGeneratedFiles(data.generated_bundle_files)
+      const fileNames = Object.keys(data.generated_bundle_files)
+      if (fileNames.length > 0) {
+        setSelectedFileTab(fileNames[0])
+      }
+      setPipelineStateStep(2)
+      setPipelineStatus('Databricks Asset Bundle successfully generated!')
+    } catch (err) {
+      setPipelineError(err.message)
+    } finally {
+      setPipelineLoading(false)
+    }
+  }
+
+  const handleRejectPipeline = () => {
+    setMappingMatrix([])
+    setGeneratedFiles({})
+    setPipelineStateStep(0)
+    setPipelineError('Pipeline mapping rejected by user.')
+  }
+
+  const handleMappingCellChange = (index, field, value) => {
+    setMappingMatrix((prev) => {
+      const updated = [...prev]
+      updated[index] = {
+        ...updated[index],
+        [field]: value
+      }
+      return updated
+    })
+  }
+
   const fetchMetrics = async () => {
     try {
       const response = await fetch(`${GATEWAY_URL}/metrics`)
@@ -487,6 +606,42 @@ function DashboardContent({ token, onLogout }) {
           <h1 style={{ fontSize: '1.5rem' }}>Antigravity <span className="text-gradient">Workspace</span></h1>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+          {/* Tab selector */}
+          <div style={{ display: 'flex', gap: '8px', background: 'rgba(0,0,0,0.3)', padding: '4px', borderRadius: '8px', border: '1px solid var(--border-glass)', marginRight: '16px' }}>
+            <button 
+              onClick={() => setActiveTab('chat')}
+              style={{
+                background: activeTab === 'chat' ? 'var(--accent-purple)' : 'transparent',
+                border: 'none',
+                color: '#fff',
+                padding: '6px 12px',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                fontSize: '0.8rem',
+                fontWeight: '600',
+                transition: 'background 0.2s'
+              }}
+            >
+              💬 Chat Console
+            </button>
+            <button 
+              onClick={() => setActiveTab('pipeline')}
+              style={{
+                background: activeTab === 'pipeline' ? 'var(--accent-purple)' : 'transparent',
+                border: 'none',
+                color: '#fff',
+                padding: '6px 12px',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                fontSize: '0.8rem',
+                fontWeight: '600',
+                transition: 'background 0.2s'
+              }}
+              id="pipeline-tab-id"
+            >
+              📦 Databricks Ingest
+            </button>
+          </div>
           <div className="status-indicator">
             <div className="status-dot"></div>
             <span>EKS Multi-Tenant Secure</span>
@@ -513,261 +668,501 @@ function DashboardContent({ token, onLogout }) {
       </header>
 
       {/* Main Dashboard Panel Grid */}
-      <main className="dashboard-container">
-        
-        {/* Left Config Panel */}
-        <section className="glass-panel sidebar-panel animate-slide-up" style={{ animationDelay: '0.1s' }}>
-          <div>
-            <h2 style={{ fontSize: '1.2rem', margin: '0 0 4px' }}>System Architecture</h2>
-            <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>EKS + Vault Security Controls</p>
-          </div>
+      {activeTab === 'chat' ? (
+        <main className="dashboard-container">
           
-          <hr style={{ border: 'none', borderTop: '1px solid var(--border-glass)', width: '100%', margin: '0' }} />
-
-          <div className="config-item">
-            <span className="config-label">Model Endpoint</span>
-            <span className="badge badge-purple" style={{ alignSelf: 'flex-start' }}>us.amazon.nova-lite-v1:0</span>
-          </div>
-
-          <div className="config-item">
-            <span className="config-label">State Checkpointer</span>
-            <span className="badge" style={{ alignSelf: 'flex-start', color: '#34D399', borderColor: 'rgba(52, 211, 153, 0.2)' }}>RDS PostgreSQL</span>
-          </div>
-
-          <div className="config-item">
-            <span className="config-label">HashiCorp Vault Auth</span>
-            <span className="badge" style={{ alignSelf: 'flex-start', color: '#10B981', borderColor: 'rgba(16, 185, 129, 0.2)' }}>Active ServiceAccount</span>
-          </div>
-
-          {/* Real-time Prometheus Metrics widget */}
-          <div style={{ padding: '12px 0' }}>
-            <span className="config-label" style={{ marginBottom: '8px', display: 'block' }}>Prometheus Router Metrics</span>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', fontSize: '0.8rem' }}>
-              <div style={{ background: 'rgba(0,0,0,0.2)', padding: '6px 10px', borderRadius: '6px', border: '1px solid var(--border-glass)' }}>
-                <div style={{ color: 'var(--text-secondary)', fontSize: '0.72rem' }}>INFRA ROUTE</div>
-                <div style={{ fontWeight: '700', fontSize: '1.1rem', color: 'var(--accent-cyan)' }}>{metrics.infra}</div>
-              </div>
-              <div style={{ background: 'rgba(0,0,0,0.2)', padding: '6px 10px', borderRadius: '6px', border: '1px solid var(--border-glass)' }}>
-                <div style={{ color: 'var(--text-secondary)', fontSize: '0.72rem' }}>CODE ROUTE</div>
-                <div style={{ fontWeight: '700', fontSize: '1.1rem', color: 'var(--accent-purple-light)' }}>{metrics.code}</div>
-              </div>
-              <div style={{ background: 'rgba(0,0,0,0.2)', padding: '6px 10px', borderRadius: '6px', border: '1px solid var(--border-glass)' }}>
-                <div style={{ color: 'var(--text-secondary)', fontSize: '0.72rem' }}>RESEARCH</div>
-                <div style={{ fontWeight: '700', fontSize: '1.1rem', color: '#F472B6' }}>{metrics.research}</div>
-              </div>
-              <div style={{ background: 'rgba(0,0,0,0.2)', padding: '6px 10px', borderRadius: '6px', border: '1px solid var(--border-glass)' }}>
-                <div style={{ color: 'var(--text-secondary)', fontSize: '0.72rem' }}>TOTAL TOKENS</div>
-                <div style={{ fontWeight: '700', fontSize: '1.1rem', color: '#FBBF24' }}>{metrics.tokens}</div>
-              </div>
+          {/* Left Config Panel */}
+          <section className="glass-panel sidebar-panel animate-slide-up" style={{ animationDelay: '0.1s' }}>
+            <div>
+              <h2 style={{ fontSize: '1.2rem', margin: '0 0 4px' }}>System Architecture</h2>
+              <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>EKS + Vault Security Controls</p>
             </div>
-          </div>
+            
+            <hr style={{ border: 'none', borderTop: '1px solid var(--border-glass)', width: '100%', margin: '0' }} />
 
-          <hr style={{ border: 'none', borderTop: '1px solid var(--border-glass)', width: '100%', margin: '0' }} />
-
-          <div className="config-item">
-            <span className="config-label">Model Temperature ({temperature})</span>
-            <input 
-              type="range" 
-              min="0" 
-              max="1" 
-              step="0.1" 
-              value={temperature} 
-              onChange={(e) => setTemperature(parseFloat(e.target.value))} 
-              style={{ width: '100%', accentColor: 'var(--accent-purple)' }}
-            />
-          </div>
-
-          <div className="config-item">
-            <span className="config-label">Configuration Preset</span>
-            <select 
-              value={systemPrompt} 
-              onChange={(e) => setSystemPrompt(e.target.value)}
-              style={{ 
-                background: 'rgba(0,0,0,0.2)', 
-                border: '1px solid var(--border-glass)', 
-                color: 'var(--text-primary)',
-                padding: '8px',
-                borderRadius: '6px',
-                outline: 'none',
-                fontFamily: 'var(--font-sans)',
-                fontSize: '0.85rem'
-              }}
-            >
-              <option value="Standard EKS Assistant Profile">Standard Developer Profile</option>
-              <option value="Security Governance Mode">Security Architect Mode</option>
-              <option value="Detailed Infrastructure Auditor">Infrastructure Auditor Mode</option>
-            </select>
-          </div>
-
-          <div style={{ marginTop: 'auto' }}>
-            <span className="config-label" style={{ marginBottom: '8px', display: 'block' }}>Quick Actions</span>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              <button 
-                onClick={() => handleQuickPrompt("What is the current capability of our app?")}
-                style={{ 
-                  background: 'rgba(255,255,255,0.02)', 
-                  border: '1px solid var(--border-glass)', 
-                  color: 'var(--text-secondary)',
-                  padding: '8px',
-                  borderRadius: '6px',
-                  cursor: 'pointer',
-                  textAlign: 'left',
-                  fontSize: '0.8rem',
-                  transition: 'background 0.2s'
-                }}
-                onMouseOver={(e) => e.target.style.background = 'rgba(255,255,255,0.05)'}
-                onMouseOut={(e) => e.target.style.background = 'rgba(255,255,255,0.02)'}
-              >
-                🔍 App Capabilities
-              </button>
-              <button 
-                onClick={() => handleQuickPrompt("Check EKS infrastructure and security health status.")}
-                style={{ 
-                  background: 'rgba(255,255,255,0.02)', 
-                  border: '1px solid var(--border-glass)', 
-                  color: 'var(--text-secondary)',
-                  padding: '8px',
-                  borderRadius: '6px',
-                  cursor: 'pointer',
-                  textAlign: 'left',
-                  fontSize: '0.8rem',
-                  transition: 'background 0.2s'
-                }}
-                onMouseOver={(e) => e.target.style.background = 'rgba(255,255,255,0.05)'}
-                onMouseOut={(e) => e.target.style.background = 'rgba(255,255,255,0.02)'}
-              >
-                🛡️ Check Cluster Health
-              </button>
+            <div className="config-item">
+              <span className="config-label">Model Endpoint</span>
+              <span className="badge badge-purple" style={{ alignSelf: 'flex-start' }}>us.amazon.nova-lite-v1:0</span>
             </div>
-          </div>
-        </section>
 
-        {/* Right Chat Panel */}
-        <section className="glass-panel chat-panel animate-slide-up">
-          {/* Scrollable Conversation */}
-          <div className="chat-history">
-            {messages.map((msg, index) => (
-              <div 
-                key={index} 
-                className={`copilotKitMessage ${
-                  msg.role === 'user' ? 'copilotKitMessageUser' : 'copilotKitMessageAssistant'
-                }`}
-                style={{ alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start', maxWidth: '75%' }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'space-between', fontWeight: '600', fontSize: '0.8rem', marginBottom: '6px', color: msg.role === 'user' ? 'var(--accent-purple-light)' : 'var(--accent-cyan)' }}>
-                  <span>{msg.role === 'user' ? 'DEVELOPER' : 'CO-ASSISTANT'}</span>
-                  {msg.specialist && (
-                    <span className="badge badge-purple" style={{ fontSize: '0.65rem', padding: '2px 6px', textTransform: 'uppercase' }}>
-                      ⚙️ {msg.specialist} Specialist
-                    </span>
-                  )}
+            <div className="config-item">
+              <span className="config-label">State Checkpointer</span>
+              <span className="badge" style={{ alignSelf: 'flex-start', color: '#34D399', borderColor: 'rgba(52, 211, 153, 0.2)' }}>RDS PostgreSQL</span>
+            </div>
+
+            <div className="config-item">
+              <span className="config-label">HashiCorp Vault Auth</span>
+              <span className="badge" style={{ alignSelf: 'flex-start', color: '#10B981', borderColor: 'rgba(16, 185, 129, 0.2)' }}>Active ServiceAccount</span>
+            </div>
+
+            {/* Real-time Prometheus Metrics widget */}
+            <div style={{ padding: '12px 0' }}>
+              <span className="config-label" style={{ marginBottom: '8px', display: 'block' }}>Prometheus Router Metrics</span>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', fontSize: '0.8rem' }}>
+                <div style={{ background: 'rgba(0,0,0,0.2)', padding: '6px 10px', borderRadius: '6px', border: '1px solid var(--border-glass)' }}>
+                  <div style={{ color: 'var(--text-secondary)', fontSize: '0.72rem' }}>INFRA ROUTE</div>
+                  <div style={{ fontWeight: '700', fontSize: '1.1rem', color: 'var(--accent-cyan)' }}>{metrics.infra}</div>
                 </div>
+                <div style={{ background: 'rgba(0,0,0,0.2)', padding: '6px 10px', borderRadius: '6px', border: '1px solid var(--border-glass)' }}>
+                  <div style={{ color: 'var(--text-secondary)', fontSize: '0.72rem' }}>CODE ROUTE</div>
+                  <div style={{ fontWeight: '700', fontSize: '1.1rem', color: 'var(--accent-purple-light)' }}>{metrics.code}</div>
+                </div>
+                <div style={{ background: 'rgba(0,0,0,0.2)', padding: '6px 10px', borderRadius: '6px', border: '1px solid var(--border-glass)' }}>
+                  <div style={{ color: 'var(--text-secondary)', fontSize: '0.72rem' }}>RESEARCH</div>
+                  <div style={{ fontWeight: '700', fontSize: '1.1rem', color: '#F472B6' }}>{metrics.research}</div>
+                </div>
+                <div style={{ background: 'rgba(0,0,0,0.2)', padding: '6px 10px', borderRadius: '6px', border: '1px solid var(--border-glass)' }}>
+                  <div style={{ color: 'var(--text-secondary)', fontSize: '0.72rem' }}>TOTAL TOKENS</div>
+                  <div style={{ fontWeight: '700', fontSize: '1.1rem', color: '#FBBF24' }}>{metrics.tokens}</div>
+                </div>
+              </div>
+            </div>
 
-                {msg.type === 'approval_request' ? (
-                  // Custom Human-in-the-loop interactive card
-                  <div style={{
-                    background: 'rgba(245, 158, 11, 0.1)',
-                    border: '1px solid rgba(245, 158, 11, 0.3)',
-                    borderRadius: '8px',
-                    padding: '14px',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '12px'
-                  }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                      <span style={{ fontSize: '1.4rem' }}>🛡️</span>
-                      <div>
-                        <div style={{ fontWeight: '700', fontSize: '0.9rem', color: '#FBBF24' }}>Infrastructure Security Interrupt</div>
-                        <div style={{ fontSize: '0.78rem', color: 'rgba(243, 244, 246, 0.7)' }}>Execution paused before: <code>{msg.next_nodes?.join(', ')}</code></div>
+            <hr style={{ border: 'none', borderTop: '1px solid var(--border-glass)', width: '100%', margin: '0' }} />
+
+            <div className="config-item">
+              <span className="config-label">Model Temperature ({temperature})</span>
+              <input 
+                type="range" 
+                min="0" 
+                max="1" 
+                step="0.1" 
+                value={temperature} 
+                onChange={(e) => setTemperature(parseFloat(e.target.value))} 
+                style={{ width: '100%', accentColor: 'var(--accent-purple)' }}
+              />
+            </div>
+
+            <div className="config-item">
+              <span className="config-label">Configuration Preset</span>
+              <select 
+                value={systemPrompt} 
+                onChange={(e) => setSystemPrompt(e.target.value)}
+                style={{ 
+                  background: 'rgba(0,0,0,0.2)', 
+                  border: '1px solid var(--border-glass)', 
+                  color: 'var(--text-primary)',
+                  padding: '8px',
+                  borderRadius: '6px',
+                  outline: 'none',
+                  fontFamily: 'var(--font-sans)',
+                  fontSize: '0.85rem'
+                }}
+              >
+                <option value="Standard EKS Assistant Profile">Standard Developer Profile</option>
+                <option value="Security Governance Mode">Security Architect Mode</option>
+                <option value="Detailed Infrastructure Auditor">Infrastructure Auditor Mode</option>
+              </select>
+            </div>
+
+            <div style={{ marginTop: 'auto' }}>
+              <span className="config-label" style={{ marginBottom: '8px', display: 'block' }}>Quick Actions</span>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <button 
+                  onClick={() => handleQuickPrompt("What is the current capability of our app?")}
+                  style={{ 
+                    background: 'rgba(255,255,255,0.02)', 
+                    border: '1px solid var(--border-glass)', 
+                    color: 'var(--text-secondary)',
+                    padding: '8px',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                    fontSize: '0.8rem',
+                    transition: 'background 0.2s'
+                  }}
+                  onMouseOver={(e) => e.target.style.background = 'rgba(255,255,255,0.05)'}
+                  onMouseOut={(e) => e.target.style.background = 'rgba(255,255,255,0.02)'}
+                >
+                  🔍 App Capabilities
+                </button>
+                <button 
+                  onClick={() => handleQuickPrompt("Check EKS infrastructure and security health status.")}
+                  style={{ 
+                    background: 'rgba(255,255,255,0.02)', 
+                    border: '1px solid var(--border-glass)', 
+                    color: 'var(--text-secondary)',
+                    padding: '8px',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                    fontSize: '0.8rem',
+                    transition: 'background 0.2s'
+                  }}
+                  onMouseOver={(e) => e.target.style.background = 'rgba(255,255,255,0.05)'}
+                  onMouseOut={(e) => e.target.style.background = 'rgba(255,255,255,0.02)'}
+                >
+                  🛡️ Check Cluster Health
+                </button>
+              </div>
+            </div>
+          </section>
+
+          {/* Right Chat Panel */}
+          <section className="glass-panel chat-panel animate-slide-up">
+            {/* Scrollable Conversation */}
+            <div className="chat-history">
+              {messages.map((msg, index) => (
+                <div 
+                  key={index} 
+                  className={`copilotKitMessage ${
+                    msg.role === 'user' ? 'copilotKitMessageUser' : 'copilotKitMessageAssistant'
+                  }`}
+                  style={{ alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start', maxWidth: '75%' }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'space-between', fontWeight: '600', fontSize: '0.8rem', marginBottom: '6px', color: msg.role === 'user' ? 'var(--accent-purple-light)' : 'var(--accent-cyan)' }}>
+                    <span>{msg.role === 'user' ? 'DEVELOPER' : 'CO-ASSISTANT'}</span>
+                    {msg.specialist && (
+                      <span className="badge badge-purple" style={{ fontSize: '0.65rem', padding: '2px 6px', textTransform: 'uppercase' }}>
+                        ⚙️ {msg.specialist} Specialist
+                      </span>
+                    )}
+                  </div>
+
+                  {msg.type === 'approval_request' ? (
+                    // Custom Human-in-the-loop interactive card
+                    <div style={{
+                      background: 'rgba(245, 158, 11, 0.1)',
+                      border: '1px solid rgba(245, 158, 11, 0.3)',
+                      borderRadius: '8px',
+                      padding: '14px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '12px'
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <span style={{ fontSize: '1.4rem' }}>🛡️</span>
+                        <div>
+                          <div style={{ fontWeight: '700', fontSize: '0.9rem', color: '#FBBF24' }}>Infrastructure Security Interrupt</div>
+                          <div style={{ fontSize: '0.78rem', color: 'rgba(243, 244, 246, 0.7)' }}>Execution paused before: <code>{msg.next_nodes?.join(', ')}</code></div>
+                        </div>
+                      </div>
+                      <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', lineHeight: '1.4' }}>
+                        An infrastructure-modifying action was routed to the <strong>EKS Specialist</strong>. Please verify the target cluster changes before approving execution.
+                      </div>
+                      <div style={{ display: 'flex', gap: '10px', marginTop: '4px' }}>
+                        <button 
+                          onClick={() => handleApprovalDecision('approve')}
+                          style={{
+                            flex: 1,
+                            background: 'rgba(16, 185, 129, 0.25)',
+                            border: '1px solid #10B981',
+                            color: '#34D399',
+                            padding: '8px',
+                            borderRadius: '6px',
+                            cursor: 'pointer',
+                            fontWeight: '600',
+                            fontSize: '0.82rem',
+                            transition: 'background 0.2s'
+                          }}
+                          onMouseOver={(e) => e.target.style.background = 'rgba(16, 185, 129, 0.4)'}
+                          onMouseOut={(e) => e.target.style.background = 'rgba(16, 185, 129, 0.25)'}
+                        >
+                          Approve Action
+                        </button>
+                        <button 
+                          onClick={() => handleApprovalDecision('reject')}
+                          style={{
+                            flex: 1,
+                            background: 'rgba(239, 68, 68, 0.2)',
+                            border: '1px solid #EF4444',
+                            color: '#F87171',
+                            padding: '8px',
+                            borderRadius: '6px',
+                            cursor: 'pointer',
+                            fontWeight: '600',
+                            fontSize: '0.82rem',
+                            transition: 'background 0.2s'
+                          }}
+                          onMouseOver={(e) => e.target.style.background = 'rgba(239, 68, 68, 0.35)'}
+                          onMouseOut={(e) => e.target.style.background = 'rgba(239, 68, 68, 0.2)'}
+                        >
+                          Reject & Terminate
+                        </button>
                       </div>
                     </div>
-                    <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', lineHeight: '1.4' }}>
-                      An infrastructure-modifying action was routed to the <strong>EKS Specialist</strong>. Please verify the target cluster changes before approving execution.
+                  ) : msg.role === 'user' ? (
+                    <div style={{ fontSize: '0.95rem', lineHeight: '1.5', whiteSpace: 'pre-wrap' }}>
+                      {msg.content}
                     </div>
-                    <div style={{ display: 'flex', gap: '10px', marginTop: '4px' }}>
-                      <button 
-                        onClick={() => handleApprovalDecision('approve')}
-                        style={{
-                          flex: 1,
-                          background: 'rgba(16, 185, 129, 0.25)',
-                          border: '1px solid #10B981',
-                          color: '#34D399',
-                          padding: '8px',
-                          borderRadius: '6px',
-                          cursor: 'pointer',
-                          fontWeight: '600',
-                          fontSize: '0.82rem',
-                          transition: 'background 0.2s'
-                        }}
-                        onMouseOver={(e) => e.target.style.background = 'rgba(16, 185, 129, 0.4)'}
-                        onMouseOut={(e) => e.target.style.background = 'rgba(16, 185, 129, 0.25)'}
-                      >
-                        Approve Action
-                      </button>
-                      <button 
-                        onClick={() => handleApprovalDecision('reject')}
-                        style={{
-                          flex: 1,
-                          background: 'rgba(239, 68, 68, 0.2)',
-                          border: '1px solid #EF4444',
-                          color: '#F87171',
-                          padding: '8px',
-                          borderRadius: '6px',
-                          cursor: 'pointer',
-                          fontWeight: '600',
-                          fontSize: '0.82rem',
-                          transition: 'background 0.2s'
-                        }}
-                        onMouseOver={(e) => e.target.style.background = 'rgba(239, 68, 68, 0.35)'}
-                        onMouseOut={(e) => e.target.style.background = 'rgba(239, 68, 68, 0.2)'}
-                      >
-                        Reject & Terminate
-                      </button>
-                    </div>
-                  </div>
-                ) : msg.role === 'user' ? (
-                  <div style={{ fontSize: '0.95rem', lineHeight: '1.5', whiteSpace: 'pre-wrap' }}>
-                    {msg.content}
-                  </div>
-                ) : (
-                  renderMessageContent(msg.content)
-                )}
-              </div>
-            ))}
+                  ) : (
+                    renderMessageContent(msg.content)
+                  )}
+                </div>
+              ))}
+              
+              {loading && (
+                <div className="typing-indicator">
+                  <span className="typing-dot"></span>
+                  <span className="typing-dot"></span>
+                  <span className="typing-dot"></span>
+                </div>
+              )}
+              <div ref={chatEndRef} />
+            </div>
+
+            {/* Form Input Area */}
+            <form className="chat-input-bar" onSubmit={handleSendMessage}>
+              <input
+                type="text"
+                className="chat-input-field"
+                placeholder="Ask a question or enter a command..."
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                disabled={loading}
+                id="chat-input-id"
+              />
+              <button 
+                type="submit" 
+                className="send-button"
+                disabled={loading || !input.trim()}
+                id="send-button-id"
+              >
+                Run Command
+              </button>
+            </form>
+          </section>
+
+        </main>
+      ) : (
+        <main className="dashboard-container" style={{ display: 'grid', gridTemplateColumns: '40% 60%', gap: '20px', height: 'calc(100vh - 100px)', padding: '0 20px 20px', boxSizing: 'border-box' }}>
+          {/* Left BRD Ingestion Panel */}
+          <section className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '16px', padding: '20px', overflow: 'hidden' }}>
+            <div>
+              <h2 style={{ fontSize: '1.2rem', margin: '0 0 4px', color: 'var(--text-primary)' }}>1. Business Value Stream BRD</h2>
+              <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Input the Value Stream document detailing source schemas</p>
+            </div>
             
-            {loading && (
-              <div className="typing-indicator">
-                <span className="typing-dot"></span>
-                <span className="typing-dot"></span>
-                <span className="typing-dot"></span>
+            <textarea
+              value={brdText}
+              onChange={(e) => setBrdText(e.target.value)}
+              disabled={pipelineLoading}
+              style={{
+                flex: 1,
+                background: 'rgba(0,0,0,0.3)',
+                border: '1px solid var(--border-glass)',
+                borderRadius: '8px',
+                padding: '16px',
+                color: '#fff',
+                fontFamily: 'var(--font-mono)',
+                fontSize: '0.85rem',
+                lineHeight: '1.5',
+                outline: 'none',
+                resize: 'none'
+              }}
+              placeholder="Paste or write Business Requirement Document (BRD) Value Stream specs here..."
+              id="brd-input-id"
+            />
+            
+            <button
+              onClick={handleAnalysePipeline}
+              disabled={pipelineLoading || !brdText.trim()}
+              className="send-button"
+              style={{ padding: '12px', borderRadius: '6px', fontWeight: '700', fontSize: '0.9rem', cursor: 'pointer' }}
+              id="analyse-pipeline-button"
+            >
+              {pipelineLoading ? 'Analyzing Ingest Elements...' : 'Generate Source-to-Target Mapping'}
+            </button>
+          </section>
+
+          {/* Right STM / DAB Bundle Explorer Panel */}
+          <section className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '16px', padding: '20px', overflow: 'hidden' }}>
+            <div>
+              <h2 style={{ fontSize: '1.2rem', margin: '0 0 4px', color: 'var(--text-primary)' }}>2. Target Mapping & Databricks Bundle</h2>
+              <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                {pipelineStateStep === 0 && 'Awaiting BRD Ingestion...'}
+                {pipelineStateStep === 1 && 'Confirm conformed IBM model alignments before bundle compilation.'}
+                {pipelineStateStep === 2 && 'Databricks Asset Bundle (DAB) ready for execution.'}
+              </p>
+            </div>
+
+            {pipelineError && (
+              <div style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)', color: '#F87171', padding: '10px 14px', borderRadius: '6px', fontSize: '0.8rem' }}>
+                ⚠️ Error: {pipelineError}
               </div>
             )}
-            <div ref={chatEndRef} />
-          </div>
 
-          {/* Form Input Area */}
-          <form className="chat-input-bar" onSubmit={handleSendMessage}>
-            <input
-              type="text"
-              className="chat-input-field"
-              placeholder="Ask a question or enter a command..."
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              disabled={loading}
-              id="chat-input-id"
-            />
-            <button 
-              type="submit" 
-              className="send-button"
-              disabled={loading || !input.trim()}
-              id="send-button-id"
-            >
-              Run Command
-            </button>
-          </form>
-        </section>
+            {pipelineLoading && (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, gap: '16px' }}>
+                <div className="typing-indicator" style={{ transform: 'scale(1.5)' }}>
+                  <span className="typing-dot"></span>
+                  <span className="typing-dot"></span>
+                  <span className="typing-dot"></span>
+                </div>
+                <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', fontWeight: '600' }} id="pipeline-loading-status">
+                  {pipelineStatus}
+                </div>
+              </div>
+            )}
 
-      </main>
+            {!pipelineLoading && pipelineStateStep === 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, color: 'var(--text-secondary)', gap: '12px' }}>
+                <span style={{ fontSize: '3rem' }}>📦</span>
+                <span>Enter Business Requirements on the left to start pipeline generation.</span>
+              </div>
+            )}
+
+            {!pipelineLoading && pipelineStateStep === 1 && (
+              <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden', gap: '16px' }}>
+                {/* STM Table */}
+                <div style={{ flex: 1, overflowY: 'auto', border: '1px solid var(--border-glass)', borderRadius: '8px', background: 'rgba(0,0,0,0.2)' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem', textAlign: 'left' }}>
+                    <thead>
+                      <tr style={{ background: 'rgba(255,255,255,0.05)', borderBottom: '1px solid var(--border-glass)' }}>
+                        <th style={{ padding: '10px' }}>Source Table</th>
+                        <th style={{ padding: '10px' }}>Source Col</th>
+                        <th style={{ padding: '10px' }}>Target Table</th>
+                        <th style={{ padding: '10px' }}>Target Attribute</th>
+                        <th style={{ padding: '10px' }}>Transform Rule</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {mappingMatrix.map((row, idx) => (
+                        <tr key={idx} style={{ borderBottom: '1px solid rgba(255,255,255,0.03)' }} className="mapping-row-item">
+                          <td style={{ padding: '10px', color: 'var(--text-secondary)' }}>{row.source_table}</td>
+                          <td style={{ padding: '10px', fontWeight: '600' }}>{row.source_column}</td>
+                          <td style={{ padding: '10px' }}>
+                            <input 
+                              type="text" 
+                              value={row.target_table || ''} 
+                              onChange={(e) => handleMappingCellChange(idx, 'target_table', e.target.value)}
+                              style={{ background: 'rgba(0,0,0,0.3)', border: '1px solid var(--border-glass)', color: '#fff', padding: '4px 6px', borderRadius: '4px', width: '100%', fontSize: '0.8rem' }}
+                            />
+                          </td>
+                          <td style={{ padding: '10px' }}>
+                            <input 
+                              type="text" 
+                              value={row.target_column || ''} 
+                              onChange={(e) => handleMappingCellChange(idx, 'target_column', e.target.value)}
+                              style={{ background: 'rgba(0,0,0,0.3)', border: '1px solid var(--border-glass)', color: '#fff', padding: '4px 6px', borderRadius: '4px', width: '100%', fontSize: '0.8rem' }}
+                            />
+                          </td>
+                          <td style={{ padding: '10px' }}>
+                            <input 
+                              type="text" 
+                              value={row.transformation_rule || ''} 
+                              onChange={(e) => handleMappingCellChange(idx, 'transformation_rule', e.target.value)}
+                              style={{ background: 'rgba(0,0,0,0.3)', border: '1px solid var(--border-glass)', color: '#fff', padding: '4px 6px', borderRadius: '4px', width: '100%', fontSize: '0.8rem' }}
+                            />
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* HITL Buttons */}
+                <div style={{ display: 'flex', gap: '12px' }}>
+                  <button
+                    onClick={handleApprovePipeline}
+                    className="send-button"
+                    style={{ flex: 1, padding: '12px', borderRadius: '6px', fontWeight: '700', cursor: 'pointer' }}
+                    id="approve-pipeline-id"
+                  >
+                    Approve & Compile Bundle
+                  </button>
+                  <button
+                    onClick={handleRejectPipeline}
+                    style={{
+                      flex: 1,
+                      background: 'rgba(239, 68, 68, 0.1)',
+                      border: '1px solid rgba(239, 68, 68, 0.3)',
+                      color: '#F87171',
+                      padding: '12px',
+                      borderRadius: '6px',
+                      fontWeight: '700',
+                      cursor: 'pointer',
+                      transition: 'background 0.2s'
+                    }}
+                    onMouseOver={(e) => e.target.style.background = 'rgba(239, 68, 68, 0.2)'}
+                    onMouseOut={(e) => e.target.style.background = 'rgba(239, 68, 68, 0.1)'}
+                  >
+                    Reject Mapping
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {!pipelineLoading && pipelineStateStep === 2 && (
+              <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden', gap: '16px' }}>
+                {/* File selectors */}
+                <div style={{ display: 'flex', gap: '6px', overflowX: 'auto', borderBottom: '1px solid var(--border-glass)', paddingBottom: '8px' }}>
+                  {Object.keys(generatedFiles).map((filename) => (
+                    <button
+                      key={filename}
+                      onClick={() => setSelectedFileTab(filename)}
+                      style={{
+                        background: selectedFileTab === filename ? 'var(--accent-purple)' : 'rgba(255,255,255,0.02)',
+                        border: '1px solid var(--border-glass)',
+                        color: '#fff',
+                        padding: '6px 12px',
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                        fontSize: '0.78rem',
+                        fontWeight: '600',
+                        whiteSpace: 'nowrap'
+                      }}
+                      className="bundle-file-tab"
+                    >
+                      📄 {filename}
+                    </button>
+                  ))}
+                </div>
+
+                {/* File Editor View */}
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>
+                  <textarea
+                    readOnly
+                    value={generatedFiles[selectedFileTab] || ''}
+                    style={{
+                      flex: 1,
+                      background: 'rgba(0,0,0,0.4)',
+                      border: '1px solid var(--border-glass)',
+                      borderRadius: '8px',
+                      padding: '16px',
+                      color: 'var(--accent-cyan)',
+                      fontFamily: 'var(--font-mono)',
+                      fontSize: '0.82rem',
+                      lineHeight: '1.5',
+                      outline: 'none',
+                      resize: 'none',
+                      overflowY: 'auto'
+                    }}
+                    id="bundle-editor-id"
+                  />
+                  <button
+                    onClick={() => navigator.clipboard.writeText(generatedFiles[selectedFileTab] || '')}
+                    style={{
+                      position: 'absolute',
+                      right: '12px',
+                      top: '12px',
+                      background: 'rgba(0,0,0,0.6)',
+                      border: '1px solid var(--border-glass)',
+                      color: '#fff',
+                      padding: '6px 10px',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      fontSize: '0.75rem',
+                      fontWeight: '600'
+                    }}
+                  >
+                    Copy Code
+                  </button>
+                </div>
+
+                {/* Reset button */}
+                <button
+                  onClick={() => setPipelineStateStep(0)}
+                  className="send-button"
+                  style={{ padding: '12px', borderRadius: '6px', fontWeight: '700', cursor: 'pointer' }}
+                >
+                  Create Another Pipeline
+                </button>
+              </div>
+            )}
+          </section>
+        </main>
+      )}
     </div>
   )
 }

@@ -13,6 +13,11 @@ from langgraph.graph.message import add_messages
 from .infra_agent import InfraAgent
 from .code_agent import CodeAgent
 from .research_agent import ResearchAgent
+from .ba_analyst_agent import BAAnalystAgent
+from .data_profiler_agent import DataProfilerAgent
+from .silver_model_agent import SilverModelAgent
+from .stm_mapping_agent import STMMappingAgent
+from .dab_generator_agent import DABGeneratorAgent
 
 logger = logging.getLogger("supervisor")
 
@@ -239,4 +244,108 @@ class SupervisorAgent:
                         "type": "token",
                         "data": chunk.content
                     }
+
+
+class PipelineState(TypedDict):
+    brd_document: str
+    value_stream_json: dict
+    bronze_schema: dict
+    silver_conformed: dict
+    mapping_matrix: list
+    approved: bool
+    generated_bundle_files: dict
+    error: Optional[str]
+
+
+class DatabricksPipelineGraph:
+    """
+    State graph orchestrating the translation of BRDs into Databricks Asset Bundles
+    using intermediate Business Analyst, Profiler, Conformer, and STM Mapping agents.
+    """
+    def __init__(self, api_key: str, db_config: Optional[dict] = None):
+        gateway_url = os.getenv(
+            "AI_GATEWAY_URL",
+            "http://kong-kong-proxy.default.svc.cluster.local:80/v1"
+        )
+        llm = ChatOpenAI(
+            base_url=gateway_url,
+            api_key=api_key,
+            model="us.amazon.nova-lite-v1:0",
+            temperature=0.0,
+            streaming=False,
+        )
+
+        self.ba_analyst = BAAnalystAgent(llm)
+        self.data_profiler = DataProfilerAgent(llm)
+        self.silver_model = SilverModelAgent(llm)
+        self.stm_mapping = STMMappingAgent(llm)
+        self.dab_generator = DABGeneratorAgent(llm)
+
+        # Build Graph
+        builder = StateGraph(PipelineState)
+        builder.add_node("ba_analyst", self._ba_analyst_node)
+        builder.add_node("profiler", self._profiler_node)
+        builder.add_node("conformer", self._conformer_node)
+        builder.add_node("mapper", self._mapper_node)
+        builder.add_node("dab_generator", self._dab_generator_node)
+
+        builder.set_entry_point("ba_analyst")
+        builder.add_edge("ba_analyst", "profiler")
+        builder.add_edge("profiler", "conformer")
+        builder.add_edge("conformer", "mapper")
+        
+        builder.add_edge("mapper", "dab_generator")
+        builder.add_edge("dab_generator", END)
+
+        # Configure RDS PostgreSQL checkpointer with local memory fallback
+        if db_config and db_config.get("db_host"):
+            try:
+                db_url = f"postgresql://{db_config['db_user']}:{db_config['db_password']}@{db_config['db_host']}:{db_config['db_port']}/{db_config['db_name']}"
+                self.pool = ConnectionPool(conninfo=db_url, max_size=10, open=True)
+                self.memory = PostgresSaver(self.pool)
+                self.memory.setup()
+            except Exception as e:
+                logger.error(f"Pipeline PostgresSaver failed: {e}. Falling back to MemorySaver.")
+                self.memory = MemorySaver()
+        else:
+            self.memory = MemorySaver()
+
+        # Compile specifying the interrupt before the DAB Generator node
+        self.graph = builder.compile(checkpointer=self.memory, interrupt_before=["dab_generator"])
+
+    def _ba_analyst_node(self, state: PipelineState) -> dict:
+        try:
+            res = self.ba_analyst.analyze_brd(state["brd_document"])
+            return {"value_stream_json": res}
+        except Exception as e:
+            return {"error": f"BAAnalyst error: {e}"}
+
+    def _profiler_node(self, state: PipelineState) -> dict:
+        try:
+            res = self.data_profiler.profile_schema(state["value_stream_json"])
+            return {"bronze_schema": res}
+        except Exception as e:
+            return {"error": f"Profiler error: {e}"}
+
+    def _conformer_node(self, state: PipelineState) -> dict:
+        try:
+            res = self.silver_model.conform_model(state["bronze_schema"])
+            return {"silver_conformed": res}
+        except Exception as e:
+            return {"error": f"Conformer error: {e}"}
+
+    def _mapper_node(self, state: PipelineState) -> dict:
+        try:
+            res = self.stm_mapping.generate_mapping(state["bronze_schema"], state["silver_conformed"])
+            return {"mapping_matrix": res.get("mappings", []), "approved": False}
+        except Exception as e:
+            return {"error": f"Mapper error: {e}"}
+
+    def _dab_generator_node(self, state: PipelineState) -> dict:
+        try:
+            res = self.dab_generator.generate_bundle(state["mapping_matrix"])
+            return {"generated_bundle_files": res.get("files", {})}
+        except Exception as e:
+            return {"error": f"DAB generator error: {e}"}
+
 

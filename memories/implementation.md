@@ -104,8 +104,15 @@ To protect credit resources, we deploy our infrastructure as an ephemeral enviro
   - Integrated client-side Cognito Signup, Confirm, and Sign In flows in the Vite frontend.
   - Built interactive approval interrupt overlays enabling lead developers to verify infrastructure commands and resume node execution via `/chat/approve` callback endpoints.
 
+- **Phase 13: Databricks Ingestion & Mapping Automation (Completed)**
+  - Developed five new specialist agents: Business Analyst (`BAAnalystAgent`), Data Profiler (`DataProfilerAgent`), Silver Model Conformer (`SilverModelAgent`), STM Mapper (`STMMappingAgent`), and DAB Generator (`DABGeneratorAgent`).
+  - Implemented the `DatabricksPipelineGraph` state graph in `app/agents/supervisor.py` with human-in-the-loop checkpoints (`interrupt_before=["dab_generator"]`).
+  - Added REST API routes `/pipeline/analyse` and `/pipeline/approve` in `app/main.py` to orchestrate multi-step pipeline compile runs.
+  - Designed the "Databricks Ingest" tab in the React frontend featuring editable mapping tables, code viewers, and state timeline widgets.
+  - Verified compilation logic, interrupts, and target schemas via local mock unit testing in `scratch/test_pipeline_compilation.py`.
+
 ## Planned Next Phases
 
-- **Phase 13: EKS Nova Model Billing Tagging & Budget Alerts** — Configure cost allocation tags and configure EKS config tags on Amazon Bedrock requests.
-- **Phase 14: Multi-Region PostgreSQL Replication** — Build read replicas for postgres database to support low-latency global state loads.
-- **Phase 15: LangSmith Observability Integration** — Connect EKS pods to LangSmith trace collection instances to audit agent reasoning loops.
+- **Phase 14: EKS Nova Model Billing Tagging & Budget Alerts** — Configure cost allocation tags and configure EKS config tags on Amazon Bedrock requests.
+- **Phase 15: Multi-Region PostgreSQL Replication** — Build read replicas for postgres database to support low-latency global state loads.
+- **Phase 16: LangSmith Observability Integration** — Connect EKS pods to LangSmith trace collection instances to audit agent reasoning loops.

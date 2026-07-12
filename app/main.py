@@ -24,12 +24,21 @@ app = FastAPI(title="AgentCore Service", version="1.0.0")
 # Global instances initialized on startup
 secrets_manager = VaultSecretsManager()
 agent_orchestrator = None
+pipeline_orchestrator = None
 COGNITO_JWKS = None
 COGNITO_ISSUER = None
 
 class ChatRequest(BaseModel):
     prompt: str
     session_id: Optional[str] = None
+
+class PipelineAnalyseRequest(BaseModel):
+    brd_document: str
+    session_id: Optional[str] = None
+
+class PipelineApproveRequest(BaseModel):
+    session_id: str
+    mapping_matrix: List[dict]
 
 class ChatResponse(BaseModel):
     response: str
@@ -111,7 +120,7 @@ def verify_token(authorization: Optional[str] = Header(None)) -> str:
 
 @app.on_event("startup")
 async def startup_event():
-    global agent_orchestrator
+    global agent_orchestrator, pipeline_orchestrator
     logger.info("Initializing AgentCore backend...")
     try:
         # Retrieve all secrets keylessly from HashiCorp Vault
@@ -127,6 +136,11 @@ async def startup_event():
         # Initialize LangGraph client with retrieved key and DB configuration
         agent_orchestrator = LangGraphAgent(api_key=api_key, db_config=secrets)
         logger.info("LangGraph agent compiled and ready!")
+
+        # Initialize pipeline graph client
+        from agents.supervisor import DatabricksPipelineGraph
+        pipeline_orchestrator = DatabricksPipelineGraph(api_key=api_key, db_config=secrets)
+        logger.info("Databricks Pipeline state graph compiled and ready!")
     except Exception as e:
         logger.error(f"FATAL: Failed to initialize security/LLM keys: {str(e)}")
 
@@ -220,6 +234,81 @@ async def chat_approve_endpoint(request: ApproveRequest, user_id: str = Depends(
             yield f"data: {json.dumps({'type': 'error', 'data': str(e)})}\n\n"
             
     return StreamingResponse(sse_generator(), media_type="text/event-stream")
+
+@app.post("/pipeline/analyse")
+async def pipeline_analyse_endpoint(request: PipelineAnalyseRequest, user_id: str = Depends(verify_token)):
+    if pipeline_orchestrator is None:
+        raise HTTPException(status_code=503, detail="Pipeline agent logic not initialized")
+    
+    session_id = request.session_id or "default"
+    thread_id = f"{user_id}:{session_id}"
+    logger.info(f"Received pipeline analysis request for user {user_id}, session {session_id}")
+    
+    # Initialize state for this thread
+    config = {"configurable": {"thread_id": thread_id}}
+    pipeline_orchestrator.graph.update_state(
+        config,
+        {
+            "brd_document": request.brd_document,
+            "value_stream_json": {},
+            "bronze_schema": {},
+            "silver_conformed": {},
+            "mapping_matrix": [],
+            "approved": False,
+            "generated_bundle_files": {},
+            "error": None
+        }
+    )
+    
+    try:
+        # Run graph until the interrupt breakpoint (before dab_generator)
+        result = pipeline_orchestrator.graph.invoke(None, config=config)
+        
+        # Check if paused at dab_generator
+        state = pipeline_orchestrator.graph.get_state(config)
+        next_nodes = list(state.next) if state else []
+        
+        return {
+            "status": "interrupted_for_approval" if "dab_generator" in next_nodes else "completed",
+            "value_stream_json": result.get("value_stream_json", {}),
+            "bronze_schema": result.get("bronze_schema", {}),
+            "silver_conformed": result.get("silver_conformed", {}),
+            "mapping_matrix": result.get("mapping_matrix", []),
+            "error": result.get("error")
+        }
+    except Exception as e:
+        logger.error(f"Pipeline analysis execution error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/pipeline/approve")
+async def pipeline_approve_endpoint(request: PipelineApproveRequest, user_id: str = Depends(verify_token)):
+    if pipeline_orchestrator is None:
+        raise HTTPException(status_code=530, detail="Pipeline agent logic not initialized")
+    
+    thread_id = f"{user_id}:{request.session_id}"
+    config = {"configurable": {"thread_id": thread_id}}
+    logger.info(f"Received pipeline approval request for user {user_id}, session {request.session_id}")
+    
+    # Update target state mappings and set approved = True
+    pipeline_orchestrator.graph.update_state(
+        config,
+        {
+            "mapping_matrix": request.mapping_matrix,
+            "approved": True
+        }
+    )
+    
+    try:
+        # Resume graph execution (input None resumes from interrupt)
+        result = pipeline_orchestrator.graph.invoke(None, config=config)
+        return {
+            "status": "success",
+            "generated_bundle_files": result.get("generated_bundle_files", {}),
+            "error": result.get("error")
+        }
+    except Exception as e:
+        logger.error(f"Pipeline approval resumption error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/metrics")
 def metrics_endpoint():
