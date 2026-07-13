@@ -1,0 +1,5 @@
+{"customer_id": "C-101", "first_name": "Alice", "last_name": "Smith", "email": "alice@example.com", "date_of_birth": "1990-05-15"}
+{"customer_id": "C-102", "first_name": "Bob", "last_name": "Jones", "email": "bob@example.com", "date_of_birth": "1985-11-20"}
+{"customer_id": "C-103", "first_name": "Charlie", "last_name": "Brown", "email": "charlie@example.com", "date_of_birth": "1992-02-14"}
+{"customer_id": "C-104", "first_name": "Diana", "last_name": "Prince", "email": "diana@example.com", "date_of_birth": "1988-08-08"}
+{"customer_id": "C-105", "first_name": "Evan", "last_name": "Wright", "email": "evan@example.com", "date_of_birth": "1995-04-30"}

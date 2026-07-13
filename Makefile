@@ -120,6 +120,18 @@ configure-bedrock-auth: config-check
 		--from-literal=config="{\"route_type\": \"llm/v1/chat\", \"auth\": {\"allow_override\": false, \"aws_access_key_id\": \"$$access_key\", \"aws_secret_access_key\": \"$$secret_key\"}, \"model\": {\"provider\": \"bedrock\", \"name\": \"us.amazon.nova-lite-v1:0\", \"options\": {\"bedrock\": {\"aws_region\": \"$(REGION)\"}}}}" \
 		--dry-run=client -o yaml | KUBECONFIG=$(KUBECONFIG_PATH) $(KUBECTL) apply -f -
 
+upload-samples: config-check
+	@echo "==> Fetching landing S3 bucket name from Terraform..."
+	@bucket=$$(cd $(TERRAFORM_DIR) && $(TERRAFORM) output -raw landing_bucket_name); \
+	if [ -z "$$bucket" ] || [ "$$bucket" = "No outputs found" ]; then \
+		echo "ERROR: Failed to retrieve S3 landing bucket name from Terraform outputs"; \
+		exit 1; \
+	fi; \
+	echo "==> Copying sample JSON data to S3 bucket $$bucket..."; \
+	$(AWS_CLI) s3 cp scratch/samples/customer.json s3://$$bucket/raw/customer/customer.json --profile $(PROFILE); \
+	$(AWS_CLI) s3 cp scratch/samples/transaction.json s3://$$bucket/raw/transaction/transaction.json --profile $(PROFILE); \
+	echo "==> Raw landing zone sample assets uploaded successfully!"
+
 build-and-push: config-check
 	@echo "==> Logging in to AWS ECR..."
 	$(AWS_CLI) ecr get-login-password --region $(REGION) --profile $(PROFILE) | $(DOCKER) login --username AWS --password-stdin $(ECR_URL)

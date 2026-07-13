@@ -215,6 +215,9 @@ Entities:
   const [generatedFiles, setGeneratedFiles] = useState({})
   const [selectedFileTab, setSelectedFileTab] = useState('')
   const [pipelineStateStep, setPipelineStateStep] = useState(0) // 0: input, 1: mapping approval, 2: bundle generated
+  const [pipelineRunLoading, setPipelineRunLoading] = useState(false)
+  const [pipelineRunResult, setPipelineRunResult] = useState(null)
+  const [activePipelineRunStatus, setActivePipelineRunStatus] = useState('') // '', 'bronze', 'silver', 'complete'
 
   const handleAnalysePipeline = async () => {
     setPipelineLoading(true)
@@ -294,6 +297,42 @@ Entities:
     setGeneratedFiles({})
     setPipelineStateStep(0)
     setPipelineError('Pipeline mapping rejected by user.')
+  }
+
+  const handleRunPipeline = async (entityName) => {
+    setPipelineRunLoading(true)
+    setPipelineRunResult(null)
+    setActivePipelineRunStatus('bronze')
+    try {
+      // Small artificial delay for visual state progress in UX
+      await new Promise((r) => setTimeout(r, 1000));
+      setActivePipelineRunStatus('silver')
+      
+      const response = await fetch(`${GATEWAY_URL}/pipeline/run`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          session_id: sessionId,
+          entity_name: entityName
+        })
+      })
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || `Execution failed with status: ${response.status}`);
+      }
+      const data = await response.json()
+      setPipelineRunResult(data)
+      setActivePipelineRunStatus('complete')
+    } catch (err) {
+      console.error(err)
+      setPipelineError(`Pipeline execution failed: ${err.message}`)
+      setActivePipelineRunStatus('')
+    } finally {
+      setPipelineRunLoading(false)
+    }
   }
 
   const handleMappingCellChange = (index, field, value) => {
@@ -1004,51 +1043,63 @@ Entities:
 
             {!pipelineLoading && pipelineStateStep === 1 && (
               <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden', gap: '16px' }}>
-                {/* STM Table */}
-                <div style={{ flex: 1, overflowY: 'auto', border: '1px solid var(--border-glass)', borderRadius: '8px', background: 'rgba(0,0,0,0.2)' }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem', textAlign: 'left' }}>
-                    <thead>
-                      <tr style={{ background: 'rgba(255,255,255,0.05)', borderBottom: '1px solid var(--border-glass)' }}>
-                        <th style={{ padding: '10px' }}>Source Table</th>
-                        <th style={{ padding: '10px' }}>Source Col</th>
-                        <th style={{ padding: '10px' }}>Target Table</th>
-                        <th style={{ padding: '10px' }}>Target Attribute</th>
-                        <th style={{ padding: '10px' }}>Transform Rule</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {mappingMatrix.map((row, idx) => (
-                        <tr key={idx} style={{ borderBottom: '1px solid rgba(255,255,255,0.03)' }} className="mapping-row-item">
-                          <td style={{ padding: '10px', color: 'var(--text-secondary)' }}>{row.source_table}</td>
-                          <td style={{ padding: '10px', fontWeight: '600' }}>{row.source_column}</td>
-                          <td style={{ padding: '10px' }}>
-                            <input 
-                              type="text" 
-                              value={row.target_table || ''} 
-                              onChange={(e) => handleMappingCellChange(idx, 'target_table', e.target.value)}
-                              style={{ background: 'rgba(0,0,0,0.3)', border: '1px solid var(--border-glass)', color: '#fff', padding: '4px 6px', borderRadius: '4px', width: '100%', fontSize: '0.8rem' }}
-                            />
-                          </td>
-                          <td style={{ padding: '10px' }}>
+                {/* Modern Side-by-Side Schema Conformance Preview Card Grid */}
+                <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px', paddingRight: '4px' }}>
+                  {mappingMatrix.map((row, idx) => {
+                    const isDirectMatch = (row.source_column === row.target_column) && !row.transformation_rule.includes('HASH');
+                    const isTransform = row.transformation_rule.includes('HASH') || row.transformation_rule.includes('CAST');
+                    const confidenceColor = isDirectMatch ? '#10B981' : isTransform ? '#F59E0B' : '#EF4444';
+                    const confidenceText = isDirectMatch ? 'Direct Pass' : isTransform ? 'Auto-Casted' : 'Override Needed';
+
+                    return (
+                      <div 
+                        key={idx} 
+                        style={{ 
+                          display: 'grid', 
+                          gridTemplateColumns: '1fr 120px 1fr', 
+                          alignItems: 'center', 
+                          gap: '12px', 
+                          padding: '12px', 
+                          border: '1px solid var(--border-glass)',
+                          borderRadius: '8px',
+                          background: 'rgba(255, 255, 255, 0.02)'
+                        }}
+                        className="mapping-row-item"
+                      >
+                        {/* Bronze Source Column */}
+                        <div style={{ background: 'rgba(239, 68, 68, 0.04)', border: '1px solid rgba(239, 68, 68, 0.1)', padding: '8px 10px', borderRadius: '6px' }}>
+                          <div style={{ fontSize: '0.62rem', color: '#F87171', fontWeight: '700', textTransform: 'uppercase', marginBottom: '2px' }}>Bronze Column</div>
+                          <div style={{ fontSize: '0.85rem', fontWeight: '700', color: '#fff' }}>{row.source_column}</div>
+                          <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{row.source_table}</div>
+                        </div>
+
+                        {/* Transition Logic Indicator */}
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', gap: '2px' }}>
+                          <div style={{ fontSize: '1rem', color: confidenceColor, fontWeight: '700' }}>➔</div>
+                          <span style={{ fontSize: '0.62rem', padding: '1px 6px', borderRadius: '10px', background: `${confidenceColor}22`, color: confidenceColor, fontWeight: '700', whiteSpace: 'nowrap' }}>
+                            {confidenceText}
+                          </span>
+                          <span style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)', maxWidth: '110px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {row.transformation_rule || 'Direct Pass'}
+                          </span>
+                        </div>
+
+                        {/* Silver Conformed Target Column */}
+                        <div style={{ background: 'rgba(6, 182, 212, 0.04)', border: '1px solid rgba(6, 182, 212, 0.1)', padding: '8px 10px', borderRadius: '6px' }}>
+                          <div style={{ fontSize: '0.62rem', color: 'var(--accent-cyan)', fontWeight: '700', textTransform: 'uppercase', marginBottom: '2px' }}>Silver Target Attribute</div>
+                          <div style={{ fontSize: '0.85rem', fontWeight: '700', color: '#fff' }}>
                             <input 
                               type="text" 
                               value={row.target_column || ''} 
                               onChange={(e) => handleMappingCellChange(idx, 'target_column', e.target.value)}
-                              style={{ background: 'rgba(0,0,0,0.3)', border: '1px solid var(--border-glass)', color: '#fff', padding: '4px 6px', borderRadius: '4px', width: '100%', fontSize: '0.8rem' }}
+                              style={{ background: 'transparent', border: 'none', borderBottom: '1px solid var(--border-glass)', color: '#fff', width: '100%', outline: 'none', fontSize: '0.85rem', fontWeight: '700' }}
                             />
-                          </td>
-                          <td style={{ padding: '10px' }}>
-                            <input 
-                              type="text" 
-                              value={row.transformation_rule || ''} 
-                              onChange={(e) => handleMappingCellChange(idx, 'transformation_rule', e.target.value)}
-                              style={{ background: 'rgba(0,0,0,0.3)', border: '1px solid var(--border-glass)', color: '#fff', padding: '4px 6px', borderRadius: '4px', width: '100%', fontSize: '0.8rem' }}
-                            />
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                          </div>
+                          <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{row.target_table}</div>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
 
                 {/* HITL Buttons */}
@@ -1150,11 +1201,70 @@ Entities:
                   </button>
                 </div>
 
+                {/* Pipeline Run Execution Controls */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-glass)', padding: '12px', borderRadius: '8px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: '0.85rem', fontWeight: '600' }}>🚀 Medallion Pipeline Ingest Execution</span>
+                    
+                    <button
+                      onClick={() => {
+                        // Extract target table base entity name dynamically (e.g. bronze_customer -> customer)
+                        const rawTarget = mappingMatrix[0]?.target_table || 'customer';
+                        const entityName = rawTarget.toLowerCase().includes('customer') ? 'customer' : 'transaction';
+                        handleRunPipeline(entityName);
+                      }}
+                      disabled={pipelineRunLoading || activePipelineRunStatus === 'complete'}
+                      className="send-button"
+                      style={{ padding: '8px 16px', borderRadius: '4px', fontSize: '0.8rem', fontWeight: '700', cursor: 'pointer' }}
+                      id="run-pipeline-id"
+                    >
+                      {pipelineRunLoading ? 'Running Conformance...' : activePipelineRunStatus === 'complete' ? 'Run Complete' : 'Run Ingestion Pipeline'}
+                    </button>
+                  </div>
+
+                  {/* Execution Progress Timeline */}
+                  {activePipelineRunStatus && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', borderTop: '1px solid var(--border-glass)', paddingTop: '8px', marginTop: '4px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem' }}>
+                        <span style={{ color: activePipelineRunStatus === 'bronze' || activePipelineRunStatus === 'silver' || activePipelineRunStatus === 'complete' ? 'var(--accent-cyan)' : 'var(--text-secondary)' }}>
+                          {activePipelineRunStatus === 'bronze' ? '● ' : '✓ '} 📥 Ingestion (S3)
+                        </span>
+                        <span style={{ color: activePipelineRunStatus === 'silver' || activePipelineRunStatus === 'complete' ? 'var(--accent-purple-light)' : 'var(--text-secondary)' }}>
+                          {activePipelineRunStatus === 'silver' ? '● ' : activePipelineRunStatus === 'complete' ? '✓ ' : '○ '} ⚙️ Conformance
+                        </span>
+                        <span style={{ color: activePipelineRunStatus === 'complete' ? '#10B981' : 'var(--text-secondary)' }}>
+                          {activePipelineRunStatus === 'complete' ? '✓ ' : '○ '} 💎 DB Load
+                        </span>
+                      </div>
+
+                      {pipelineRunResult && (
+                        <div style={{ background: 'rgba(16, 185, 129, 0.05)', border: '1px solid rgba(16, 185, 129, 0.2)', padding: '8px', borderRadius: '6px', fontSize: '0.75rem', color: '#6EE7B7' }} id="pipeline-run-result-id">
+                          🎉 Ingested <strong>{pipelineRunResult.records_processed}</strong> records successfully into <strong>{pipelineRunResult.silver_table}</strong> table!
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
                 {/* Reset button */}
                 <button
-                  onClick={() => setPipelineStateStep(0)}
-                  className="send-button"
-                  style={{ padding: '12px', borderRadius: '6px', fontWeight: '700', cursor: 'pointer' }}
+                  onClick={() => {
+                    setPipelineStateStep(0);
+                    setActivePipelineRunStatus('');
+                    setPipelineRunResult(null);
+                  }}
+                  style={{
+                    background: 'rgba(255,255,255,0.05)',
+                    border: '1px solid var(--border-glass)',
+                    color: '#fff',
+                    padding: '12px',
+                    borderRadius: '6px',
+                    fontWeight: '700',
+                    cursor: 'pointer',
+                    transition: 'background 0.2s'
+                  }}
+                  onMouseOver={(e) => e.target.style.background = 'rgba(255,255,255,0.1)'}
+                  onMouseOut={(e) => e.target.style.background = 'rgba(255,255,255,0.05)'}
                 >
                   Create Another Pipeline
                 </button>

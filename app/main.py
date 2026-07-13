@@ -40,6 +40,11 @@ class PipelineApproveRequest(BaseModel):
     session_id: str
     mapping_matrix: List[dict]
 
+class PipelineRunRequest(BaseModel):
+    session_id: str
+    bucket_name: Optional[str] = None
+    entity_name: str
+
 class ChatResponse(BaseModel):
     response: str
     specialist: Optional[str] = None
@@ -322,6 +327,35 @@ async def pipeline_approve_endpoint(request: PipelineApproveRequest, user_id: st
         }
     except Exception as e:
         logger.error(f"Pipeline approval resumption error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/pipeline/run")
+def run_pipeline(request: PipelineRunRequest, user_id: str = Depends(verify_token)):
+    if pipeline_orchestrator is None:
+        raise HTTPException(status_code=503, detail="Pipeline agent logic not initialized")
+
+    thread_id = f"{user_id}:{request.session_id}"
+    config = {"configurable": {"thread_id": thread_id}}
+    
+    # Retrieve conformed mappings from state checkpointer
+    state = pipeline_orchestrator.graph.get_state(config)
+    if not state or not state.values or "mapping_matrix" not in state.values:
+        raise HTTPException(status_code=400, detail="No conformed mappings found. Generate and approve mappings first.")
+
+    mappings = state.values["mapping_matrix"]
+    db_config = pipeline_orchestrator.db_config
+
+    try:
+        from pipeline_runner import PipelineRunner
+        runner = PipelineRunner(db_config)
+        res = runner.run_conformance(
+            entity_name=request.entity_name,
+            mappings=mappings,
+            bucket=request.bucket_name
+        )
+        return res
+    except Exception as e:
+        logger.error(f"Pipeline execution run error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/metrics")
