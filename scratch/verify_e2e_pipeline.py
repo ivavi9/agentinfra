@@ -11,9 +11,12 @@ USER_POOL_ID = "us-east-1_JDJLk1IzO"
 REGION = "us-east-1"
 USERNAME = "devtest@example.com"
 PASSWORD = "DevTest123!"
-SESSION_ID = "test-e2e-session-py"
+SESSION_ID = f"e2e-session-{int(time.time())}"   # unique per run — avoids stale state
 GATEWAY_URL = "http://a90fb1d5f715a4159abc7483e774bd8d-498703573.us-east-1.elb.amazonaws.com"
 KUBECONFIG = "KUBECONFIG=.kube/config"
+
+print(f"Session ID: {SESSION_ID}")
+
 
 print("1. Authenticating with Cognito...")
 try:
@@ -52,14 +55,23 @@ with httpx.Client(timeout=30.0) as client:
     print("Analysis response status:", resp.status_code)
     try:
         analysis_data = resp.json()
-        print("Analysis completed successfully. Mappings generated:")
-        print(json.dumps(analysis_data.get("mapping_matrix"), indent=2))
+        mappings_from_analysis = analysis_data.get("mapping_matrix", [])
+        print(f"Analysis completed. Mappings generated: {len(mappings_from_analysis)}")
+        if not mappings_from_analysis:
+            print("ERROR: LLM returned empty mappings — aborting.")
+            print("Full response:", json.dumps(analysis_data, indent=2))
+            sys.exit(1)
+        print(json.dumps(mappings_from_analysis, indent=2))
     except Exception as e:
         print("Failed to parse analysis response:", resp.text)
         sys.exit(1)
 
+    # Give the LangGraph checkpointer 2s to flush state before approve reads it
+    time.sleep(2)
+
     print("\n3. Sending pipeline approval (POST /pipeline/approve)...")
-    mappings = analysis_data.get("mapping_matrix", [])
+    mappings = mappings_from_analysis
+
     for m in mappings:
         if m.get("source_column") == "customer_id":
             m["target_column"] = "customer_id_hash"

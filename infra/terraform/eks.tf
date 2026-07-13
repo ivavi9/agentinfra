@@ -101,6 +101,22 @@ resource "aws_eks_cluster" "main" {
   ]
 }
 
+# Launch template: sets IMDS hop-limit=2 so EKS pods can reach instance metadata for IAM creds
+resource "aws_launch_template" "node" {
+  name_prefix = "${var.cluster_name}-node-lt-"
+
+  metadata_options {
+    http_endpoint               = "enabled"
+    http_put_response_hop_limit = 2   # must be ≥2 for pods to use IMDS
+    http_tokens                 = "required"
+    instance_metadata_tags      = "disabled"
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
 # EKS Node Group
 resource "aws_eks_node_group" "main" {
   cluster_name    = aws_eks_cluster.main.name
@@ -116,6 +132,11 @@ resource "aws_eks_node_group" "main" {
 
   instance_types = ["t3.medium"]
 
+  launch_template {
+    id      = aws_launch_template.node.id
+    version = aws_launch_template.node.latest_version
+  }
+
   depends_on = [
     aws_iam_role_policy_attachment.node_AmazonEKSWorkerNodePolicy,
     aws_iam_role_policy_attachment.node_AmazonEKS_CNI_Policy,
@@ -123,6 +144,7 @@ resource "aws_eks_node_group" "main" {
     aws_iam_role_policy_attachment.node_AmazonBedrockFullAccess
   ]
 }
+
 
 # OIDC Provider (Required for IAM Roles for Service Accounts - IRSA)
 data "tls_certificate" "eks" {
