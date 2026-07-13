@@ -1318,7 +1318,8 @@ function AuthScreen({ onLoginSuccess }) {
           }
         })
         const token = data.AuthenticationResult.IdToken
-        onLoginSuccess(token)
+        const refreshToken = data.AuthenticationResult.RefreshToken
+        onLoginSuccess(token, refreshToken)
       } else if (authMode === 'signup') {
         await handleCognitoRequest('SignUp', {
           ClientId: '5f6s8b6ur4bokfnucs98ieds3p',
@@ -1502,17 +1503,90 @@ function AuthScreen({ onLoginSuccess }) {
   )
 }
 
-function App() {
-  const [token, setToken] = useState(() => localStorage.getItem('agent_jwt_token') || null)
+// Decode JWT and check if it's expired (with 60s buffer)
+function isTokenExpired(token) {
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1]))
+    return (payload.exp * 1000) < (Date.now() + 60_000)
+  } catch {
+    return true
+  }
+}
 
-  const handleLoginSuccess = (newToken) => {
+// Silently refresh Cognito IdToken using stored RefreshToken
+async function refreshIdToken(clientId) {
+  const refreshToken = localStorage.getItem('agent_refresh_token')
+  if (!refreshToken) return null
+  try {
+    const resp = await fetch('https://cognito-idp.us-east-1.amazonaws.com/', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-amz-json-1.1',
+        'X-Amz-Target': 'AWSCognitoIdentityProviderService.InitiateAuth'
+      },
+      body: JSON.stringify({
+        ClientId: clientId,
+        AuthFlow: 'REFRESH_TOKEN_AUTH',
+        AuthParameters: { REFRESH_TOKEN: refreshToken }
+      })
+    })
+    const data = await resp.json()
+    if (!resp.ok) throw new Error(data.message)
+    return data.AuthenticationResult.IdToken
+  } catch (e) {
+    console.warn('Token refresh failed:', e)
+    return null
+  }
+}
+
+const COGNITO_CLIENT_ID = '5f6s8b6ur4bokfnucs98ieds3p'
+
+function App() {
+  const [token, setToken] = useState(() => {
+    const stored = localStorage.getItem('agent_jwt_token')
+    if (stored && isTokenExpired(stored)) {
+      // Expired on load — will trigger auto-refresh below or show login
+      return stored
+    }
+    return stored || null
+  })
+
+  // Auto-refresh expired token on mount and every 5 minutes
+  useEffect(() => {
+    const tryRefresh = async () => {
+      const current = localStorage.getItem('agent_jwt_token')
+      if (current && isTokenExpired(current)) {
+        const fresh = await refreshIdToken(COGNITO_CLIENT_ID)
+        if (fresh) {
+          localStorage.setItem('agent_jwt_token', fresh)
+          setToken(fresh)
+        } else {
+          handleLogout()
+        }
+      }
+    }
+    tryRefresh()
+    const interval = setInterval(tryRefresh, 5 * 60 * 1000) // check every 5 min
+    return () => clearInterval(interval)
+  }, [])
+
+  const handleLoginSuccess = (newToken, refreshToken) => {
     localStorage.setItem('agent_jwt_token', newToken)
+    if (refreshToken) localStorage.setItem('agent_refresh_token', refreshToken)
     setToken(newToken)
   }
 
   const handleLogout = () => {
     localStorage.removeItem('agent_jwt_token')
+    localStorage.removeItem('agent_refresh_token')
     setToken(null)
+  }
+
+  if (!token || isTokenExpired(token)) {
+    // If expired and no refresh token, show login
+    const hasRefresh = !!localStorage.getItem('agent_refresh_token')
+    if (!hasRefresh) return <AuthScreen onLoginSuccess={handleLoginSuccess} />
+    // Otherwise render dashboard — auto-refresh useEffect will update token
   }
 
   if (!token) {
