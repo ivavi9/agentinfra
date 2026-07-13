@@ -111,8 +111,20 @@ To protect credit resources, we deploy our infrastructure as an ephemeral enviro
   - Designed the "Databricks Ingest" tab in the React frontend featuring editable mapping tables, code viewers, and state timeline widgets.
   - Verified compilation logic, interrupts, and target schemas via local mock unit testing in `scratch/test_pipeline_compilation.py`.
 
+- **Phase 14: E2E Medallion Pipeline Ingestion Validation (Completed ✅ — 2026-07-13)**
+  - Added `POST /pipeline/run` endpoint in `app/main.py` backed by `PipelineRunner` (`app/pipeline_runner.py`) to ingest JSON assets from S3 into PostgreSQL Bronze & Silver tables.
+  - Added `boto3>=1.34.0` to `app/requirements.txt` (was missing from container image).
+  - **Fixed `pipeline_orchestrator.db_config` AttributeError (500)**: Introduced module-level `_vault_secrets: dict` cached at startup; used by `/pipeline/run` instead of non-existent orchestrator attribute.
+  - **Fixed IMDS Hop-Limit (500 — "Unable to locate credentials")**: Set `HttpPutResponseHopLimit=2` on both EKS EC2 nodes via `modify-instance-metadata-options` so pods can reach the instance metadata service for keyless IAM creds. Persisted via `aws_launch_template.node` in `infra/terraform/eks.tf`.
+  - **Added S3 IAM inline policy to node role**: Attached `AgentS3LandingAccess` policy scoped to `agent-infra-landing-bucket-*` on the EKS node role. Persisted as `aws_iam_role_policy.node_s3_landing_access` in Terraform.
+  - **Fixed duplicate column SQL error (500)**: Replaced `conformed_columns` list with an ordered `dict` (keyed by lowercase column name) in `pipeline_runner.py`. Metadata columns `_ingested_at` and `_source_file` are only appended if not already produced by LLM mappings.
+  - **Fixed stale LangGraph state collisions**: Verify script now uses a timestamp-suffixed `SESSION_ID` per run to ensure each invocation gets a fresh graph thread.
+  - **Verified in-pod**: `kubectl exec` into `agent-core` pod confirmed `bronze_transaction: 5 rows`, `silver_transaction: 5 rows` with correct conformed columns (`ac_txn_id`, `customer_id_hash`, `ac_id`, `transaction_amount`, `transaction_timestamp`), SHA-256 hashed customer IDs, and DECIMAL-cast amounts.
+
 ## Planned Next Phases
 
-- **Phase 14: EKS Nova Model Billing Tagging & Budget Alerts** — Configure cost allocation tags and configure EKS config tags on Amazon Bedrock requests.
-- **Phase 15: Multi-Region PostgreSQL Replication** — Build read replicas for postgres database to support low-latency global state loads.
-- **Phase 16: LangSmith Observability Integration** — Connect EKS pods to LangSmith trace collection instances to audit agent reasoning loops.
+- **Phase 15: Git-Tracked CI/CD with Jenkins Linting** — Implement `Jenkinsfile` with flake8/black/yamllint stages and DAB bundle deployment stages. Jenkins runs free via EC2 self-hosted or GitHub Actions.
+- **Phase 16: EKS Nova Model Billing Tagging & Budget Alerts** — Configure cost allocation tags and configure EKS config tags on Amazon Bedrock requests.
+- **Phase 17: Multi-Region PostgreSQL Replication** — Build read replicas for postgres database to support low-latency global state loads.
+- **Phase 18: LangSmith Observability Integration** — Connect EKS pods to LangSmith trace collection instances to audit agent reasoning loops.
+
