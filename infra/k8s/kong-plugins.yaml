@@ -4,7 +4,7 @@ metadata:
   name: ip-rate-limiting
   namespace: default
 config:
-  minute: 10
+  minute: 300
   policy: local
 plugin: rate-limiting
 
