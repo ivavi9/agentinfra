@@ -3,7 +3,7 @@ import { CopilotKit, useCopilotReadable } from '@copilotkit/react-core'
 import './App.css'
 
 // Define the public Kong LoadBalancer gateway URL
-const GATEWAY_URL = 'http://a65f67686ce654acf983a7ca18be5436-1225260377.us-east-1.elb.amazonaws.com'
+const GATEWAY_URL = 'http://a90fb1d5f715a4159abc7483e774bd8d-498703573.us-east-1.elb.amazonaws.com'
 
 // Parser for inline elements: **bold** and `code`
 const parseInlineMarkdown = (text) => {
@@ -1310,7 +1310,7 @@ function AuthScreen({ onLoginSuccess }) {
     try {
       if (authMode === 'login') {
         const data = await handleCognitoRequest('InitiateAuth', {
-          ClientId: '6g8b6coqqv8at3s4f5v9o22n5m',
+          ClientId: '4l2vjvvh4tma7jlb36hhf9ogss',
           AuthFlow: 'USER_PASSWORD_AUTH',
           AuthParameters: {
             USERNAME: email,
@@ -1321,7 +1321,7 @@ function AuthScreen({ onLoginSuccess }) {
         onLoginSuccess(token)
       } else if (authMode === 'signup') {
         await handleCognitoRequest('SignUp', {
-          ClientId: '6g8b6coqqv8at3s4f5v9o22n5m',
+          ClientId: '4l2vjvvh4tma7jlb36hhf9ogss',
           Username: email,
           Password: password,
           UserAttributes: [{ Name: 'email', Value: email }]
@@ -1331,7 +1331,7 @@ function AuthScreen({ onLoginSuccess }) {
         setErrorMsg('Sign up successful! Please check your email for a verification code.')
       } else if (authMode === 'verify') {
         await handleCognitoRequest('ConfirmSignUp', {
-          ClientId: '6g8b6coqqv8at3s4f5v9o22n5m',
+          ClientId: '4l2vjvvh4tma7jlb36hhf9ogss',
           Username: verifyEmail,
           ConfirmationCode: verifyCode
         })
