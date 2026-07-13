@@ -68,10 +68,13 @@ class PipelineRunner:
                 # Determine table schemas based on mappings — deduplicate target columns
                 seen_cols = {}  # col_name_lower -> (col_name, db_type)
                 for m in mappings:
-                    col_name = (m.get("target_attribute") or "").strip()
+                    # Support both field names from analyse (target_column) and approve (target_attribute)
+                    col_name = (
+                        m.get("target_attribute") or m.get("target_column") or ""
+                    ).strip()
                     if not col_name:
                         continue
-                    rule = m.get("transform_rule", "").upper()
+                    rule = (m.get("transform_rule") or m.get("transformation_rule") or "").upper()
 
                     # Convert Spark/SQL types to PostgreSQL types
                     db_type = "VARCHAR(255)"
@@ -108,42 +111,54 @@ class PipelineRunner:
                 cur.execute(f"DROP TABLE IF EXISTS {silver_table} CASCADE")
                 cur.execute(f"CREATE TABLE {silver_table} ({', '.join(conformed_columns)})")
 
-
                 # Insert transformed records
                 inserted_count = 0
                 for rec in raw_records:
                     transformed_rec = {}
                     for m in mappings:
                         src_col = m.get("source_column")
-                        target_col = m.get("target_attribute")
-                        rule = m.get("transform_rule", "")
+                        # Support both target_attribute (approve payload) and target_column (analyse response)
+                        target_col = (
+                            m.get("target_attribute")
+                            or m.get("target_column")
+                            or ""
+                        ).strip()
+                        if not target_col:
+                            continue  # skip unmapped rows
+                        rule = m.get("transform_rule") or m.get("transformation_rule") or ""
 
                         val = rec.get(src_col)
 
                         # Apply transformation rule conversions
                         if "HASH" in rule.upper() or "SHA" in rule.upper():
-                            if val is not None:
-                                transformed_rec[target_col] = hashlib.sha256(str(val).encode('utf-8')).hexdigest()
-                            else:
-                                transformed_rec[target_col] = None
-                        elif "DECIMAL" in rule.upper() or "DOUBLE" in rule.upper():
+                            transformed_rec[target_col] = hashlib.sha256(str(val).encode('utf-8')).hexdigest() if val is not None else None
+                        elif "DECIMAL" in rule.upper() or "DOUBLE" in rule.upper() or "NUMERIC" in rule.upper():
                             transformed_rec[target_col] = float(val) if val is not None else None
                         elif "INT" in rule.upper():
                             transformed_rec[target_col] = int(val) if val is not None else None
+                        elif "CURRENT_TIMESTAMP" in rule.upper() or "current_timestamp" in rule:
+                            transformed_rec[target_col] = None  # DB default handles this
+                        elif rule.startswith("lit("):
+                            # Spark lit() literal — extract string value
+                            transformed_rec[target_col] = rule[4:-1].strip("'\"")
                         else:
                             transformed_rec[target_col] = str(val) if val is not None else None
 
-                    # Insert to Bronze (Raw values mapped)
-                    cols = list(transformed_rec.keys()) + ["_source_file"]
-                    vals = list(transformed_rec.values()) + [f"s3://{bucket}/{key}"]
-                    
+                    # Only include columns that exist in the schema (seen_cols)
+                    filtered_rec = {
+                        k: v for k, v in transformed_rec.items()
+                        if k.lower() in seen_cols
+                    }
+                    filtered_rec["_source_file"] = f"s3://{bucket}/{key}"
+
+                    cols = list(filtered_rec.keys())
+                    vals = list(filtered_rec.values())
+
                     placeholders = ", ".join(["%s"] * len(vals))
                     cur.execute(
                         f"INSERT INTO {bronze_table} ({', '.join(cols)}) VALUES ({placeholders})",
                         vals
                     )
-
-                    # Insert to Silver (Conformed)
                     cur.execute(
                         f"INSERT INTO {silver_table} ({', '.join(cols)}) VALUES ({placeholders})",
                         vals
@@ -153,3 +168,4 @@ class PipelineRunner:
                 conn.commit()
                 logger.info(f"Ingested and conformed {inserted_count} records into {silver_table}")
                 return {"status": "SUCCESS", "records_processed": inserted_count, "silver_table": silver_table}
+
