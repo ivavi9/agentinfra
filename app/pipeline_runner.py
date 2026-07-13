@@ -65,39 +65,49 @@ class PipelineRunner:
         # 2. Establish database connection
         with self._get_connection() as conn:
             with conn.cursor() as cur:
-                # Determine table schemas based on mappings
-                conformed_columns = []
+                # Determine table schemas based on mappings — deduplicate target columns
+                seen_cols = {}  # col_name_lower -> (col_name, db_type)
                 for m in mappings:
-                    col_name = m.get("target_attribute")
+                    col_name = (m.get("target_attribute") or "").strip()
+                    if not col_name:
+                        continue
                     rule = m.get("transform_rule", "").upper()
-                    
-                    # Convert Spark types to PostgreSQL types
+
+                    # Convert Spark/SQL types to PostgreSQL types
                     db_type = "VARCHAR(255)"
-                    if "DECIMAL" in rule:
+                    if "DECIMAL" in rule or "NUMERIC" in rule:
                         db_type = "NUMERIC(18,2)"
                     elif "INT" in rule:
                         db_type = "INTEGER"
-                    elif "DATE" in rule and "TIME" not in rule:
+                    elif ("DATE" in rule and "TIME" not in rule) or "TO_DATE" in rule:
                         db_type = "DATE"
-                    elif "TIMESTAMP" in rule:
+                    elif "TIMESTAMP" in rule or "CURRENT_TIMESTAMP" in rule or "current_timestamp" in m.get("transform_rule", ""):
                         db_type = "TIMESTAMP"
-                    conformed_columns.append(f"{col_name} {db_type}")
 
-                # Append metadata columns
-                conformed_columns.append("_ingested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
-                conformed_columns.append("_source_file VARCHAR(512)")
+                    key_lower = col_name.lower()
+                    if key_lower not in seen_cols:
+                        seen_cols[key_lower] = (col_name, db_type)
+
+                # Append standard metadata columns only if not already produced by LLM mappings
+                if "_ingested_at" not in seen_cols:
+                    seen_cols["_ingested_at"] = ("_ingested_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+                if "_source_file" not in seen_cols:
+                    seen_cols["_source_file"] = ("_source_file", "VARCHAR(512)")
+
+                conformed_columns = [f"{col} {dtype}" for col, dtype in seen_cols.values()]
 
                 # Create Bronze & Silver tables
                 bronze_table = f"bronze_{entity_name}"
                 silver_table = f"silver_{entity_name}"
 
-                logger.info(f"Recreating table {bronze_table}...")
+                logger.info(f"Recreating table {bronze_table} with columns: {list(seen_cols.keys())}")
                 cur.execute(f"DROP TABLE IF EXISTS {bronze_table} CASCADE")
                 cur.execute(f"CREATE TABLE {bronze_table} ({', '.join(conformed_columns)})")
 
                 logger.info(f"Recreating table {silver_table}...")
                 cur.execute(f"DROP TABLE IF EXISTS {silver_table} CASCADE")
                 cur.execute(f"CREATE TABLE {silver_table} ({', '.join(conformed_columns)})")
+
 
                 # Insert transformed records
                 inserted_count = 0
