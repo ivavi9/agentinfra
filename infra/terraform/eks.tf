@@ -68,6 +68,13 @@ resource "aws_iam_role_policy" "node_s3_landing_access" {
     Version = "2012-10-17"
     Statement = [
       {
+        Sid    = "ListAllBuckets"
+        Effect = "Allow"
+        Action = ["s3:ListAllMyBuckets"]
+        Resource = "*"
+      },
+      {
+        Sid    = "LandingBucketAccess"
         Effect = "Allow"
         Action = [
           "s3:GetObject",
