@@ -11,6 +11,8 @@ from vault_client import VaultSecretsManager
 from agent import LangGraphAgent
 from langchain_core.messages import HumanMessage, AIMessage
 
+_vault_secrets: dict = {}
+
 class ApproveRequest(BaseModel):
     session_id: str
     action: str # "approve" or "reject"
@@ -125,7 +127,7 @@ def verify_token(authorization: Optional[str] = Header(None)) -> str:
 
 @app.on_event("startup")
 async def startup_event():
-    global agent_orchestrator, pipeline_orchestrator
+    global agent_orchestrator, pipeline_orchestrator, _vault_secrets
     logger.info("Initializing AgentCore backend...")
     try:
         # Retrieve all secrets keylessly from HashiCorp Vault
@@ -152,6 +154,9 @@ async def startup_event():
         if cognito_url:
             await load_jwks(cognito_url)
         
+        # Cache secrets at module scope for downstream pipeline runners
+        _vault_secrets = secrets
+
         # Initialize LangGraph client with retrieved key and DB configuration
         agent_orchestrator = LangGraphAgent(api_key=api_key, db_config=secrets)
         logger.info("LangGraph agent compiled and ready!")
@@ -343,7 +348,9 @@ def run_pipeline(request: PipelineRunRequest, user_id: str = Depends(verify_toke
         raise HTTPException(status_code=400, detail="No conformed mappings found. Generate and approve mappings first.")
 
     mappings = state.values["mapping_matrix"]
-    db_config = pipeline_orchestrator.db_config
+    if not mappings:
+        raise HTTPException(status_code=400, detail="Mapping matrix is empty. Run /pipeline/analyse first.")
+    db_config = _vault_secrets
 
     try:
         from pipeline_runner import PipelineRunner
