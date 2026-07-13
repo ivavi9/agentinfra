@@ -59,7 +59,32 @@ resource "aws_iam_role_policy_attachment" "node_AmazonBedrockFullAccess" {
   role       = aws_iam_role.node.name
 }
 
-# EKS Cluster Control Plane
+# Keyless S3 access for EKS pods via node group IAM role (IRSA pattern)
+resource "aws_iam_role_policy" "node_s3_landing_access" {
+  name = "AgentS3LandingAccess"
+  role = aws_iam_role.node.name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:ListBucket",
+          "s3:DeleteObject"
+        ]
+        Resource = [
+          "arn:aws:s3:::agent-infra-landing-bucket-*",
+          "arn:aws:s3:::agent-infra-landing-bucket-*/*"
+        ]
+      }
+    ]
+  })
+}
+
+
 resource "aws_eks_cluster" "main" {
   name     = var.cluster_name
   role_arn = aws_iam_role.cluster.arn
