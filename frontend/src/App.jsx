@@ -1310,7 +1310,7 @@ function AuthScreen({ onLoginSuccess }) {
     try {
       if (authMode === 'login') {
         const data = await handleCognitoRequest('InitiateAuth', {
-          ClientId: '4l2vjvvh4tma7jlb36hhf9ogss',
+          ClientId: '5f6s8b6ur4bokfnucs98ieds3p',
           AuthFlow: 'USER_PASSWORD_AUTH',
           AuthParameters: {
             USERNAME: email,
@@ -1321,7 +1321,7 @@ function AuthScreen({ onLoginSuccess }) {
         onLoginSuccess(token)
       } else if (authMode === 'signup') {
         await handleCognitoRequest('SignUp', {
-          ClientId: '4l2vjvvh4tma7jlb36hhf9ogss',
+          ClientId: '5f6s8b6ur4bokfnucs98ieds3p',
           Username: email,
           Password: password,
           UserAttributes: [{ Name: 'email', Value: email }]
@@ -1331,7 +1331,7 @@ function AuthScreen({ onLoginSuccess }) {
         setErrorMsg('Sign up successful! Please check your email for a verification code.')
       } else if (authMode === 'verify') {
         await handleCognitoRequest('ConfirmSignUp', {
-          ClientId: '4l2vjvvh4tma7jlb36hhf9ogss',
+          ClientId: '5f6s8b6ur4bokfnucs98ieds3p',
           Username: verifyEmail,
           ConfirmationCode: verifyCode
         })
