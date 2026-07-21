@@ -1,12 +1,14 @@
 import logging
 import os
 import json
+import uuid
+from datetime import datetime, timezone
 import jwt
 import httpx
-from fastapi import FastAPI, HTTPException, Depends, Header, Response
+from fastapi import FastAPI, HTTPException, Depends, Header, Response, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from vault_client import VaultSecretsManager
 from agent import LangGraphAgent
 from langchain_core.messages import HumanMessage, AIMessage
@@ -463,8 +465,44 @@ async def pipeline_approve_endpoint(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/pipeline/run")
-def run_pipeline(request: PipelineRunRequest, user_id: str = Depends(verify_token)):
+JOBS_STORE: Dict[str, Dict[str, Any]] = {}
+
+
+def _execute_async_pipeline_job(
+    job_id: str,
+    request: PipelineRunRequest,
+    user_id: str,
+    mappings: list,
+    db_config: dict,
+):
+    """Async background worker task for downloading S3 assets and running Medallion ingestion."""
+    JOBS_STORE[job_id]["status"] = "RUNNING"
+    JOBS_STORE[job_id]["started_at"] = datetime.now(timezone.utc).isoformat()
+    try:
+        from pipeline_runner import PipelineRunner
+
+        runner = PipelineRunner(db_config)
+        res = runner.run_conformance(
+            entity_name=request.entity_name,
+            mappings=mappings,
+            bucket=request.bucket_name,
+        )
+        JOBS_STORE[job_id]["status"] = "COMPLETED"
+        JOBS_STORE[job_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
+        JOBS_STORE[job_id]["result"] = res
+    except Exception as e:
+        logger.error(f"Async pipeline execution error for job {job_id}: {e}")
+        JOBS_STORE[job_id]["status"] = "FAILED"
+        JOBS_STORE[job_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
+        JOBS_STORE[job_id]["error"] = str(e)
+
+
+@app.post("/pipeline/run", status_code=202)
+def run_pipeline(
+    request: PipelineRunRequest,
+    background_tasks: BackgroundTasks,
+    user_id: str = Depends(verify_token),
+):
     if pipeline_orchestrator is None:
         raise HTTPException(
             status_code=503, detail="Pipeline agent logic not initialized"
@@ -487,21 +525,39 @@ def run_pipeline(request: PipelineRunRequest, user_id: str = Depends(verify_toke
             status_code=400,
             detail="Mapping matrix is empty. Run /pipeline/analyse first.",
         )
-    db_config = _vault_secrets
 
-    try:
-        from pipeline_runner import PipelineRunner
+    job_id = f"job-{uuid.uuid4().hex[:8]}"
+    JOBS_STORE[job_id] = {
+        "job_id": job_id,
+        "status": "QUEUED",
+        "user_id": user_id,
+        "entity_name": request.entity_name,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
 
-        runner = PipelineRunner(db_config)
-        res = runner.run_conformance(
-            entity_name=request.entity_name,
-            mappings=mappings,
-            bucket=request.bucket_name,
-        )
-        return res
-    except Exception as e:
-        logger.error(f"Pipeline execution run error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    background_tasks.add_task(
+        _execute_async_pipeline_job,
+        job_id,
+        request,
+        user_id,
+        mappings,
+        _vault_secrets,
+    )
+
+    return {
+        "status": "QUEUED",
+        "job_id": job_id,
+        "status_url": f"/pipeline/status/{job_id}",
+        "message": f"Pipeline execution job '{job_id}' queued for async background execution.",
+    }
+
+
+@app.get("/pipeline/status/{job_id}")
+def get_pipeline_job_status(job_id: str, user_id: str = Depends(verify_token)):
+    """Returns status and execution metrics for a background pipeline run job."""
+    if job_id not in JOBS_STORE:
+        raise HTTPException(status_code=404, detail=f"Job ID '{job_id}' not found")
+    return JOBS_STORE[job_id]
 
 
 @app.get("/metrics")
