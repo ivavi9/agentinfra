@@ -1,12 +1,13 @@
-import os
 import json
 import logging
-from datetime import datetime
 import hashlib
 import boto3
 import psycopg
 
+from typing import Optional, Dict, Any
+
 logger = logging.getLogger("agent-core.pipeline_runner")
+
 
 class PipelineRunner:
     def __init__(self, db_config: dict):
@@ -23,7 +24,9 @@ class PipelineRunner:
                 if name.startswith("agent-infra-landing-bucket-"):
                     logger.info(f"Discovered landing bucket: {name}")
                     return name
-            raise FileNotFoundError("No bucket found matching prefix 'agent-infra-landing-bucket-'")
+            raise FileNotFoundError(
+                "No bucket found matching prefix 'agent-infra-landing-bucket-'"
+            )
         except Exception as e:
             logger.error(f"Failed to discover landing bucket: {str(e)}")
             raise e
@@ -53,7 +56,9 @@ class PipelineRunner:
             logger.error(f"Failed to download or parse s3://{bucket}/{key}: {str(e)}")
             raise e
 
-    def run_conformance(self, entity_name: str, mappings: list, bucket: str = None) -> dict:
+    def run_conformance(
+        self, entity_name: str, mappings: list, bucket: Optional[str] = None
+    ) -> dict:
         """Ingests raw S3 assets, performs column transformations, and writes conformed tables to PostgreSQL."""
         if not bucket:
             bucket = self.discover_landing_bucket()
@@ -74,7 +79,9 @@ class PipelineRunner:
                     ).strip()
                     if not col_name:
                         continue
-                    rule = (m.get("transform_rule") or m.get("transformation_rule") or "").upper()
+                    rule = (
+                        m.get("transform_rule") or m.get("transformation_rule") or ""
+                    ).upper()
 
                     # Convert Spark/SQL types to PostgreSQL types
                     db_type = "VARCHAR(255)"
@@ -84,7 +91,11 @@ class PipelineRunner:
                         db_type = "INTEGER"
                     elif ("DATE" in rule and "TIME" not in rule) or "TO_DATE" in rule:
                         db_type = "DATE"
-                    elif "TIMESTAMP" in rule or "CURRENT_TIMESTAMP" in rule or "current_timestamp" in m.get("transform_rule", ""):
+                    elif (
+                        "TIMESTAMP" in rule
+                        or "CURRENT_TIMESTAMP" in rule
+                        or "current_timestamp" in m.get("transform_rule", "")
+                    ):
                         db_type = "TIMESTAMP"
 
                     key_lower = col_name.lower()
@@ -93,79 +104,207 @@ class PipelineRunner:
 
                 # Append standard metadata columns only if not already produced by LLM mappings
                 if "_ingested_at" not in seen_cols:
-                    seen_cols["_ingested_at"] = ("_ingested_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+                    seen_cols["_ingested_at"] = (
+                        "_ingested_at",
+                        "TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
+                    )
                 if "_source_file" not in seen_cols:
                     seen_cols["_source_file"] = ("_source_file", "VARCHAR(512)")
 
-                conformed_columns = [f"{col} {dtype}" for col, dtype in seen_cols.values()]
+                conformed_columns = [
+                    f"{col} {dtype}" for col, dtype in seen_cols.values()
+                ]
 
-                # Create Bronze & Silver tables
+                # Create Bronze (append-only), Silver (MERGE/upsert), and Quarantine tables
                 bronze_table = f"bronze_{entity_name}"
                 silver_table = f"silver_{entity_name}"
+                quarantine_table = f"quarantine_{entity_name}"
 
-                logger.info(f"Recreating table {bronze_table} with columns: {list(seen_cols.keys())}")
-                cur.execute(f"DROP TABLE IF EXISTS {bronze_table} CASCADE")
-                cur.execute(f"CREATE TABLE {bronze_table} ({', '.join(conformed_columns)})")
+                # Find primary surrogate key column for Silver MERGE upserts
+                pk_col = None
+                for m in mappings:
+                    target_col = (
+                        m.get("target_attribute") or m.get("target_column") or ""
+                    ).strip()
+                    if target_col and (
+                        m.get("is_surrogate_key") or m.get("is_primary_key")
+                    ):
+                        pk_col = target_col
+                        break
 
-                logger.info(f"Recreating table {silver_table}...")
-                cur.execute(f"DROP TABLE IF EXISTS {silver_table} CASCADE")
-                cur.execute(f"CREATE TABLE {silver_table} ({', '.join(conformed_columns)})")
+                if not pk_col:
+                    for col_key, (col_name, _) in seen_cols.items():
+                        if "id" in col_key or "pk" in col_key:
+                            pk_col = col_name
+                            break
+                if not pk_col:
+                    pk_col = list(seen_cols.values())[0][0]
 
-                # Insert transformed records
+                # Check existing DB schema for Silver table's actual PK to prevent ON CONFLICT constraint mismatch
+                try:
+                    cur.execute(
+                        """
+                        SELECT kcu.column_name
+                        FROM information_schema.table_constraints tc
+                        JOIN information_schema.key_column_usage kcu
+                          ON tc.constraint_name = kcu.constraint_name
+                         AND tc.table_schema = kcu.table_schema
+                        WHERE tc.constraint_type = 'PRIMARY KEY'
+                          AND tc.table_name = %s
+                        LIMIT 1
+                    """,
+                        (silver_table,),
+                    )
+                    existing_pk_row = cur.fetchone()
+                    if existing_pk_row and isinstance(existing_pk_row[0], str):
+                        pk_col = existing_pk_row[0]
+                except Exception as ex_pk:
+                    logger.warning(
+                        f"Could not inspect existing PK constraint for {silver_table}: {ex_pk}"
+                    )
+
+                logger.info(f"Ensuring Bronze append-only table {bronze_table}...")
+                cur.execute(
+                    f"CREATE TABLE IF NOT EXISTS {bronze_table} ({', '.join(conformed_columns)})"
+                )
+
+                logger.info(
+                    f"Ensuring Silver upsert table {silver_table} with PK ({pk_col})..."
+                )
+                silver_cols_def = []
+                for col_name, dtype in seen_cols.values():
+                    if col_name == pk_col:
+                        silver_cols_def.append(f"{col_name} {dtype} PRIMARY KEY")
+                    else:
+                        silver_cols_def.append(f"{col_name} {dtype}")
+
+                # Re-create or ensure silver table with PK
+                cur.execute(
+                    f"CREATE TABLE IF NOT EXISTS {silver_table} ({', '.join(silver_cols_def)})"
+                )
+                cur.execute(
+                    f"CREATE TABLE IF NOT EXISTS {quarantine_table} ({', '.join(conformed_columns)}, _rejection_reason VARCHAR(255))"
+                )
+
                 inserted_count = 0
+                quarantined_count = 0
+
                 for rec in raw_records:
-                    transformed_rec = {}
+                    transformed_rec: Dict[str, Any] = {}
                     for m in mappings:
                         src_col = m.get("source_column")
-                        # Support both target_attribute (approve payload) and target_column (analyse response)
                         target_col = (
-                            m.get("target_attribute")
-                            or m.get("target_column")
-                            or ""
+                            m.get("target_attribute") or m.get("target_column") or ""
                         ).strip()
                         if not target_col:
-                            continue  # skip unmapped rows
-                        rule = m.get("transform_rule") or m.get("transformation_rule") or ""
-
+                            continue
+                        rule = (
+                            m.get("transform_rule")
+                            or m.get("transformation_rule")
+                            or ""
+                        )
                         val = rec.get(src_col)
 
                         # Apply transformation rule conversions
                         if "HASH" in rule.upper() or "SHA" in rule.upper():
-                            transformed_rec[target_col] = hashlib.sha256(str(val).encode('utf-8')).hexdigest() if val is not None else None
-                        elif "DECIMAL" in rule.upper() or "DOUBLE" in rule.upper() or "NUMERIC" in rule.upper():
-                            transformed_rec[target_col] = float(val) if val is not None else None
+                            transformed_rec[target_col] = (
+                                hashlib.sha256(str(val).encode("utf-8")).hexdigest()
+                                if val is not None
+                                else None
+                            )
+                        elif (
+                            "DECIMAL" in rule.upper()
+                            or "DOUBLE" in rule.upper()
+                            or "NUMERIC" in rule.upper()
+                        ):
+                            transformed_rec[target_col] = (
+                                float(val) if val is not None else None
+                            )
                         elif "INT" in rule.upper():
-                            transformed_rec[target_col] = int(val) if val is not None else None
-                        elif "CURRENT_TIMESTAMP" in rule.upper() or "current_timestamp" in rule:
-                            transformed_rec[target_col] = None  # DB default handles this
+                            transformed_rec[target_col] = (
+                                int(val) if val is not None else None
+                            )
+                        elif (
+                            "CURRENT_TIMESTAMP" in rule.upper()
+                            or "current_timestamp" in rule
+                        ):
+                            transformed_rec[target_col] = None  # DB default
                         elif rule.startswith("lit("):
-                            # Spark lit() literal — extract string value
                             transformed_rec[target_col] = rule[4:-1].strip("'\"")
                         else:
-                            transformed_rec[target_col] = str(val) if val is not None else None
+                            transformed_rec[target_col] = (
+                                str(val) if val is not None else None
+                            )
 
-                    # Only include columns that exist in the schema (seen_cols)
                     filtered_rec = {
-                        k: v for k, v in transformed_rec.items()
+                        k: v
+                        for k, v in transformed_rec.items()
                         if k.lower() in seen_cols
                     }
                     filtered_rec["_source_file"] = f"s3://{bucket}/{key}"
 
                     cols = list(filtered_rec.keys())
                     vals = list(filtered_rec.values())
-
                     placeholders = ", ".join(["%s"] * len(vals))
+
+                    # 1. Bronze: Raw Append-Only Ingestion
                     cur.execute(
                         f"INSERT INTO {bronze_table} ({', '.join(cols)}) VALUES ({placeholders})",
-                        vals
+                        vals,
                     )
-                    cur.execute(
-                        f"INSERT INTO {silver_table} ({', '.join(cols)}) VALUES ({placeholders})",
-                        vals
+
+                    # 2. Data Quality Gate Check
+                    rejection_reason = None
+                    pk_val = next(
+                        (
+                            v
+                            for k, v in filtered_rec.items()
+                            if k.lower() == pk_col.lower()
+                        ),
+                        None,
                     )
-                    inserted_count += 1
+                    if pk_val is None or str(pk_val).strip() == "":
+                        rejection_reason = "NULL_PRIMARY_KEY"
+
+                    if rejection_reason:
+                        # Quarantine row
+                        quarantine_cols = cols + ["_rejection_reason"]
+                        quarantine_vals = vals + [rejection_reason]
+                        q_placeholders = ", ".join(["%s"] * len(quarantine_vals))
+                        cur.execute(
+                            f"INSERT INTO {quarantine_table} ({', '.join(quarantine_cols)}) VALUES ({q_placeholders})",
+                            quarantine_vals,
+                        )
+                        quarantined_count += 1
+                    else:
+                        # 3. Silver: Idempotent MERGE / Upsert on Primary Key
+                        non_pk_cols = [c for c in cols if c != pk_col]
+                        if non_pk_cols:
+                            update_stmt = ", ".join(
+                                [f"{c} = EXCLUDED.{c}" for c in non_pk_cols]
+                            )
+                            upsert_sql = f"""
+                                INSERT INTO {silver_table} ({', '.join(cols)}) 
+                                VALUES ({placeholders})
+                                ON CONFLICT ({pk_col}) DO UPDATE SET {update_stmt}
+                            """
+                        else:
+                            upsert_sql = f"""
+                                INSERT INTO {silver_table} ({', '.join(cols)}) 
+                                VALUES ({placeholders})
+                                ON CONFLICT ({pk_col}) DO NOTHING
+                            """
+                        cur.execute(upsert_sql, vals)
+                        inserted_count += 1
 
                 conn.commit()
-                logger.info(f"Ingested and conformed {inserted_count} records into {silver_table}")
-                return {"status": "SUCCESS", "records_processed": inserted_count, "silver_table": silver_table}
-
+                logger.info(
+                    f"Ingested {inserted_count} conformed records into {silver_table}, quarantined {quarantined_count} records."
+                )
+                return {
+                    "status": "SUCCESS",
+                    "records_processed": inserted_count,
+                    "records_quarantined": quarantined_count,
+                    "silver_table": silver_table,
+                    "quarantine_table": quarantine_table,
+                }

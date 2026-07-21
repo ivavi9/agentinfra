@@ -28,16 +28,6 @@ output "ecr_repository_url" {
   description = "The URL of the created ECR repository"
 }
 
-output "bedrock_access_key_id" {
-  value     = aws_iam_access_key.bedrock_user_key.id
-  sensitive = true
-}
-
-output "bedrock_secret_access_key" {
-  value     = aws_iam_access_key.bedrock_user_key.secret
-  sensitive = true
-}
-
 output "rds_endpoint" {
   value       = aws_db_instance.postgres.endpoint
   description = "The connection endpoint for the RDS PostgreSQL checkpointer"

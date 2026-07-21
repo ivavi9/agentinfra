@@ -34,6 +34,11 @@ resource "aws_security_group" "rds" {
   }
 }
 
+resource "random_password" "rds_password" {
+  length  = 24
+  special = false
+}
+
 resource "aws_db_instance" "postgres" {
   identifier             = "${var.cluster_name}-db"
   allocated_storage      = 20
@@ -43,7 +48,7 @@ resource "aws_db_instance" "postgres" {
   instance_class         = "db.t3.micro"
   db_name                = "agentinfra"
   username               = "postgres"
-  password               = "postgresSecurePass123!" # Dev credentials - securely stored downstream in Vault
+  password               = random_password.rds_password.result
   db_subnet_group_name   = aws_db_subnet_group.rds.name
   vpc_security_group_ids = [aws_security_group.rds.id]
   skip_final_snapshot    = true

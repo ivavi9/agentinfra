@@ -11,11 +11,15 @@ from vault_client import VaultSecretsManager
 from agent import LangGraphAgent
 from langchain_core.messages import HumanMessage, AIMessage
 
+from fastapi.middleware.cors import CORSMiddleware
+
 _vault_secrets: dict = {}
+
 
 class ApproveRequest(BaseModel):
     session_id: str
-    action: str # "approve" or "reject"
+    action: str  # "approve" or "reject"
+
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -23,33 +27,56 @@ logger = logging.getLogger("agent-core")
 
 app = FastAPI(title="AgentCore Service", version="1.0.0")
 
+# Configure CORS explicitly with scoped origins (no wildcard with credentials)
+allowed_origins_env = os.getenv(
+    "ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:3000"
+)
+allowed_origins = [
+    origin.strip() for origin in allowed_origins_env.split(",") if origin.strip()
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # Global instances initialized on startup
 secrets_manager = VaultSecretsManager()
 agent_orchestrator = None
 pipeline_orchestrator = None
 COGNITO_JWKS = None
 COGNITO_ISSUER = None
+COGNITO_CLIENT_ID = None
+
 
 class ChatRequest(BaseModel):
     prompt: str
     session_id: Optional[str] = None
 
+
 class PipelineAnalyseRequest(BaseModel):
     brd_document: str
     session_id: Optional[str] = None
 
+
 class PipelineApproveRequest(BaseModel):
     session_id: str
     mapping_matrix: List[dict]
+
 
 class PipelineRunRequest(BaseModel):
     session_id: str
     bucket_name: Optional[str] = None
     entity_name: str
 
+
 class ChatResponse(BaseModel):
     response: str
     specialist: Optional[str] = None
+
 
 async def load_jwks(issuer_url: str):
     global COGNITO_JWKS, COGNITO_ISSUER
@@ -67,28 +94,38 @@ async def load_jwks(issuer_url: str):
     except Exception as e:
         logger.error(f"Error loading JWKS keys: {e}")
 
+
 def verify_token(authorization: Optional[str] = Header(None)) -> str:
-    """Verifies incoming JWT Cognito token and extracts user_id (sub)."""
+    """Verifies incoming JWT Cognito token and extracts user_id (sub). Fail-closed by design."""
+    # Explicit env flag for local development testing only
+    if os.getenv("DEV_BYPASS_AUTH", "").lower() == "true":
+        logger.warning("DEV_BYPASS_AUTH enabled — returning dev_user")
+        return "dev_user"
+
     if not authorization:
-        # Fallback to default user for curl / dev queries
-        return "default_user"
-    
+        raise HTTPException(status_code=401, detail="Missing authorization header")
+
     if not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Invalid authorization header format")
-        
+        raise HTTPException(
+            status_code=401, detail="Invalid authorization header format"
+        )
+
     token = authorization.split(" ")[1]
-    
+
     if not COGNITO_JWKS:
-        logger.warning("JWKS not loaded. Bypassing verification (debug mode).")
-        return "default_user"
-        
+        logger.error("Cognito JWKS not initialized or unavailable")
+        raise HTTPException(
+            status_code=503,
+            detail="Authentication service unavailable (JWKS uninitialized)",
+        )
+
     try:
         # Decode header to find key ID (kid)
         unverified_header = jwt.get_unverified_header(token)
         kid = unverified_header.get("kid")
         if not kid:
             raise HTTPException(status_code=401, detail="Header missing kid claim")
-            
+
         # Find matching key in JWKS
         rsa_key = None
         for key in COGNITO_JWKS.get("keys", []):
@@ -99,35 +136,48 @@ def verify_token(authorization: Optional[str] = Header(None)) -> str:
                     "use": key["use"],
                     "alg": key["alg"],
                     "n": key["n"],
-                    "e": key["e"]
+                    "e": key["e"],
                 }
                 break
-                
+
         if not rsa_key:
             raise HTTPException(status_code=401, detail="Signing key not found in JWKS")
-            
+
         # Construct public key and verify signature
         public_key = jwt.algorithms.RSAAlgorithm.from_jwk(rsa_key)
         payload = jwt.decode(
             token,
-            public_key,
+            public_key,  # type: ignore
             algorithms=["RS256"],
             issuer=COGNITO_ISSUER,
-            options={"verify_aud": False}
+            options={"verify_aud": False},
         )
-        
-        # Return sub (user ID)
-        return payload.get("sub") or "default_user"
-        
+
+        # Verify audience or client_id claim if client ID is configured
+        if COGNITO_CLIENT_ID:
+            token_client = payload.get("client_id") or payload.get("aud")
+            if token_client != COGNITO_CLIENT_ID:
+                raise HTTPException(
+                    status_code=401, detail="Token audience/client_id mismatch"
+                )
+
+        sub = payload.get("sub")
+        if not sub:
+            raise HTTPException(status_code=401, detail="Token missing sub claim")
+        return sub
+
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token has expired")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"JWT Verification failed: {e}")
         raise HTTPException(status_code=401, detail=f"JWT invalid: {str(e)}")
 
+
 @app.on_event("startup")
 async def startup_event():
-    global agent_orchestrator, pipeline_orchestrator, _vault_secrets
+    global agent_orchestrator, pipeline_orchestrator, _vault_secrets, COGNITO_CLIENT_ID
     logger.info("Initializing AgentCore backend...")
     try:
         # Retrieve all secrets keylessly from HashiCorp Vault
@@ -136,10 +186,14 @@ async def startup_event():
             api_key = secrets["api_key"]
             logger.info("Successfully retrieved Gemini API key from Vault!")
         except Exception as vault_err:
-            logger.warning(f"Could not connect to Vault: {vault_err}. Checking environment variables fallback...")
+            logger.warning(
+                f"Could not connect to Vault: {vault_err}. Checking environment variables fallback..."
+            )
             api_key = os.getenv("GEMINI_API_KEY") or os.getenv("OPENAI_API_KEY")
             if not api_key:
-                raise RuntimeError("No API key found in Vault or GEMINI_API_KEY/OPENAI_API_KEY environment variables.")
+                raise RuntimeError(
+                    "No API key found in Vault or GEMINI_API_KEY/OPENAI_API_KEY environment variables."
+                )
             secrets = {
                 "api_key": api_key,
                 "db_host": os.getenv("DB_HOST"),
@@ -148,12 +202,16 @@ async def startup_event():
                 "db_user": os.getenv("DB_USER"),
                 "db_password": os.getenv("DB_PASSWORD"),
             }
-        
+
         # Pre-load JWKS keys for Cognito validation
         cognito_url = secrets.get("cognito_endpoint")
         if cognito_url:
             await load_jwks(cognito_url)
-        
+
+        COGNITO_CLIENT_ID = secrets.get("cognito_client_id") or os.getenv(
+            "COGNITO_CLIENT_ID"
+        )
+
         # Cache secrets at module scope for downstream pipeline runners
         _vault_secrets = secrets
 
@@ -163,10 +221,14 @@ async def startup_event():
 
         # Initialize pipeline graph client
         from agents.supervisor import DatabricksPipelineGraph
-        pipeline_orchestrator = DatabricksPipelineGraph(api_key=api_key, db_config=secrets)
+
+        pipeline_orchestrator = DatabricksPipelineGraph(
+            api_key=api_key, db_config=secrets
+        )
         logger.info("Databricks Pipeline state graph compiled and ready!")
     except Exception as e:
         logger.error(f"FATAL: Failed to initialize security/LLM keys: {str(e)}")
+
 
 @app.get("/health")
 def health_check():
@@ -174,80 +236,106 @@ def health_check():
         raise HTTPException(status_code=500, detail="Service uninitialized")
     return {"status": "healthy", "vault": "connected"}
 
+
+@app.get("/config")
+def get_runtime_config():
+    secrets = _vault_secrets or {}
+    return {
+        "cognito_user_pool_id": secrets.get("cognito_user_pool_id")
+        or os.getenv("COGNITO_USER_POOL_ID", ""),
+        "cognito_client_id": secrets.get("cognito_client_id")
+        or os.getenv("COGNITO_CLIENT_ID", ""),
+        "aws_region": secrets.get("aws_region") or os.getenv("AWS_REGION", "us-east-1"),
+        "api_url": os.getenv("API_URL", ""),
+    }
+
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat_endpoint(request: ChatRequest, user_id: str = Depends(verify_token)):
     if agent_orchestrator is None:
         raise HTTPException(status_code=503, detail="Agent logic not initialized")
-    
+
     try:
         session_id = request.session_id or "default"
         thread_id = f"{user_id}:{session_id}"
-        logger.info(f"Received prompt for user {user_id}, session {session_id} -> thread {thread_id}: '{request.prompt[:30]}...'")
+        logger.info(
+            f"Received prompt for user {user_id}, session {session_id} -> thread {thread_id}: '{request.prompt[:30]}...'"
+        )
         response_text, specialist_key = agent_orchestrator.run(
-            user_prompt=request.prompt,
-            session_id=thread_id
+            user_prompt=request.prompt, session_id=thread_id
         )
         return ChatResponse(response=response_text, specialist=specialist_key)
     except Exception as e:
         logger.error(f"Error during agent runtime execution: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Agent Error: {str(e)}")
 
+
 @app.post("/chat/stream")
-async def chat_stream_endpoint(request: ChatRequest, user_id: str = Depends(verify_token)):
+async def chat_stream_endpoint(
+    request: ChatRequest, user_id: str = Depends(verify_token)
+):
     if agent_orchestrator is None:
         raise HTTPException(status_code=503, detail="Agent logic not initialized")
-    
+
     session_id = request.session_id or "default"
     thread_id = f"{user_id}:{session_id}"
-    logger.info(f"Received stream prompt for user {user_id}, session {session_id} -> thread {thread_id}: '{request.prompt[:30]}...'")
-    
+    logger.info(
+        f"Received stream prompt for user {user_id}, session {session_id} -> thread {thread_id}: '{request.prompt[:30]}...'"
+    )
+
     async def sse_generator():
         try:
             async for event in agent_orchestrator.astream(
-                user_prompt=request.prompt,
-                session_id=thread_id
+                user_prompt=request.prompt, session_id=thread_id
             ):
                 yield f"data: {json.dumps(event)}\n\n"
-            
+
             # Check if graph has paused execution at an interrupt node
             config = {"configurable": {"thread_id": thread_id}}
             state = agent_orchestrator.graph.get_state(config)
             if state and state.next:
-                logger.info(f"Graph execution paused at interrupt node: {state.next}. Requiring user approval.")
+                logger.info(
+                    f"Graph execution paused at interrupt node: {state.next}. Requiring user approval."
+                )
                 yield f"data: {json.dumps({'type': 'approval_required', 'next_nodes': list(state.next)})}\n\n"
         except Exception as e:
             logger.error(f"Error in stream generation: {str(e)}")
             yield f"data: {json.dumps({'type': 'error', 'data': str(e)})}\n\n"
-            
+
     return StreamingResponse(sse_generator(), media_type="text/event-stream")
 
+
 @app.post("/chat/approve")
-async def chat_approve_endpoint(request: ApproveRequest, user_id: str = Depends(verify_token)):
+async def chat_approve_endpoint(
+    request: ApproveRequest, user_id: str = Depends(verify_token)
+):
     if agent_orchestrator is None:
         raise HTTPException(status_code=503, detail="Agent logic not initialized")
-    
+
     thread_id = f"{user_id}:{request.session_id}"
-    logger.info(f"Received approval response for user {user_id}, session {request.session_id} -> action: {request.action}")
-    
+    logger.info(
+        f"Received approval response for user {user_id}, session {request.session_id} -> action: {request.action}"
+    )
+
     if request.action == "reject":
         # Cancel the pending run by updating state to end
         config = {"configurable": {"thread_id": thread_id}}
         agent_orchestrator.graph.update_state(config, None, as_node="__end__")
-        
+
         async def cancel_generator():
             yield f"data: {json.dumps({'type': 'status', 'data': 'Action execution cancelled by user.'})}\n\n"
+
         return StreamingResponse(cancel_generator(), media_type="text/event-stream")
-        
+
     # If approved, resume the graph!
     async def sse_generator():
         try:
             # Pass None as prompt to resume graph from interrupt
             async for event in agent_orchestrator.astream(
-                user_prompt=None,
-                session_id=thread_id
+                user_prompt=None, session_id=thread_id
             ):
                 yield f"data: {json.dumps(event)}\n\n"
-                
+
             # After resume, check if there are further interrupts
             config = {"configurable": {"thread_id": thread_id}}
             state = agent_orchestrator.graph.get_state(config)
@@ -256,18 +344,25 @@ async def chat_approve_endpoint(request: ApproveRequest, user_id: str = Depends(
         except Exception as e:
             logger.error(f"Error resuming graph from interrupt: {str(e)}")
             yield f"data: {json.dumps({'type': 'error', 'data': str(e)})}\n\n"
-            
+
     return StreamingResponse(sse_generator(), media_type="text/event-stream")
 
+
 @app.post("/pipeline/analyse")
-async def pipeline_analyse_endpoint(request: PipelineAnalyseRequest, user_id: str = Depends(verify_token)):
+async def pipeline_analyse_endpoint(
+    request: PipelineAnalyseRequest, user_id: str = Depends(verify_token)
+):
     if pipeline_orchestrator is None:
-        raise HTTPException(status_code=503, detail="Pipeline agent logic not initialized")
-    
+        raise HTTPException(
+            status_code=503, detail="Pipeline agent logic not initialized"
+        )
+
     session_id = request.session_id or "default"
     thread_id = f"{user_id}:{session_id}"
-    logger.info(f"Received pipeline analysis request for user {user_id}, session {session_id}")
-    
+    logger.info(
+        f"Received pipeline analysis request for user {user_id}, session {session_id}"
+    )
+
     # Initialize state for this thread
     config = {"configurable": {"thread_id": thread_id}}
     pipeline_orchestrator.graph.update_state(
@@ -280,118 +375,171 @@ async def pipeline_analyse_endpoint(request: PipelineAnalyseRequest, user_id: st
             "mapping_matrix": [],
             "approved": False,
             "generated_bundle_files": {},
-            "error": None
-        }
+            "error": None,
+        },
     )
-    
+
     try:
         # Run graph until the interrupt breakpoint (before dab_generator)
         result = pipeline_orchestrator.graph.invoke(None, config=config)
-        
+
         # Check if paused at dab_generator
         state = pipeline_orchestrator.graph.get_state(config)
         next_nodes = list(state.next) if state else []
-        
+
         return {
-            "status": "interrupted_for_approval" if "dab_generator" in next_nodes else "completed",
+            "status": (
+                "interrupted_for_approval"
+                if "dab_generator" in next_nodes
+                else "completed"
+            ),
             "value_stream_json": result.get("value_stream_json", {}),
             "bronze_schema": result.get("bronze_schema", {}),
             "silver_conformed": result.get("silver_conformed", {}),
             "mapping_matrix": result.get("mapping_matrix", []),
-            "error": result.get("error")
+            "validation": result.get("validation", {}),
+            "error": result.get("error"),
         }
     except Exception as e:
         logger.error(f"Pipeline analysis execution error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.post("/pipeline/approve")
-async def pipeline_approve_endpoint(request: PipelineApproveRequest, user_id: str = Depends(verify_token)):
+async def pipeline_approve_endpoint(
+    request: PipelineApproveRequest, user_id: str = Depends(verify_token)
+):
     if pipeline_orchestrator is None:
-        raise HTTPException(status_code=530, detail="Pipeline agent logic not initialized")
-    
+        raise HTTPException(
+            status_code=503, detail="Pipeline agent logic not initialized"
+        )
+
     thread_id = f"{user_id}:{request.session_id}"
     config = {"configurable": {"thread_id": thread_id}}
-    logger.info(f"Received pipeline approval request for user {user_id}, session {request.session_id}")
-    
+    logger.info(
+        f"Received pipeline approval request for user {user_id}, session {request.session_id}"
+    )
+
+    # Re-run PipelineValidator on the approved/hand-edited mapping matrix
+    try:
+        from validator import PipelineValidator
+
+        current_state = pipeline_orchestrator.graph.get_state(config)
+        bronze_schema = (
+            current_state.values.get("bronze_schema", {})
+            if current_state and current_state.values
+            else {}
+        )
+        val_res = PipelineValidator.validate_mapping_matrix(
+            bronze_schema, request.mapping_matrix
+        )
+    except Exception as val_err:
+        logger.warning(f"Re-validation failed on human approved mapping: {val_err}")
+        raise HTTPException(
+            status_code=400, detail=f"Mapping validation error: {val_err}"
+        )
+
     # Update target state mappings and set approved = True
     pipeline_orchestrator.graph.update_state(
         config,
         {
             "mapping_matrix": request.mapping_matrix,
-            "approved": True
-        }
+            "validation": val_res,
+            "approved": True,
+        },
     )
-    
+
     try:
         # Resume graph execution (input None resumes from interrupt)
         result = pipeline_orchestrator.graph.invoke(None, config=config)
         return {
             "status": "success",
             "generated_bundle_files": result.get("generated_bundle_files", {}),
-            "error": result.get("error")
+            "validation": result.get("validation", val_res),
+            "error": result.get("error"),
         }
     except Exception as e:
         logger.error(f"Pipeline approval resumption error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.post("/pipeline/run")
 def run_pipeline(request: PipelineRunRequest, user_id: str = Depends(verify_token)):
     if pipeline_orchestrator is None:
-        raise HTTPException(status_code=503, detail="Pipeline agent logic not initialized")
+        raise HTTPException(
+            status_code=503, detail="Pipeline agent logic not initialized"
+        )
 
     thread_id = f"{user_id}:{request.session_id}"
     config = {"configurable": {"thread_id": thread_id}}
-    
+
     # Retrieve conformed mappings from state checkpointer
     state = pipeline_orchestrator.graph.get_state(config)
     if not state or not state.values or "mapping_matrix" not in state.values:
-        raise HTTPException(status_code=400, detail="No conformed mappings found. Generate and approve mappings first.")
+        raise HTTPException(
+            status_code=400,
+            detail="No conformed mappings found. Generate and approve mappings first.",
+        )
 
     mappings = state.values["mapping_matrix"]
     if not mappings:
-        raise HTTPException(status_code=400, detail="Mapping matrix is empty. Run /pipeline/analyse first.")
+        raise HTTPException(
+            status_code=400,
+            detail="Mapping matrix is empty. Run /pipeline/analyse first.",
+        )
     db_config = _vault_secrets
 
     try:
         from pipeline_runner import PipelineRunner
+
         runner = PipelineRunner(db_config)
         res = runner.run_conformance(
             entity_name=request.entity_name,
             mappings=mappings,
-            bucket=request.bucket_name
+            bucket=request.bucket_name,
         )
         return res
     except Exception as e:
         logger.error(f"Pipeline execution run error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.get("/metrics")
 def metrics_endpoint():
     from metrics import get_prometheus_metrics
-    return Response(content=get_prometheus_metrics(), media_type="text/plain; version=0.0.4")
+
+    return Response(
+        content=get_prometheus_metrics(), media_type="text/plain; version=0.0.4"
+    )
+
 
 @app.get("/chat/history")
 def get_chat_history(session_id: str = "default", user_id: str = Depends(verify_token)):
     if agent_orchestrator is None:
         raise HTTPException(status_code=503, detail="Agent logic not initialized")
-    
+
     try:
         thread_id = f"{user_id}:{session_id}"
         logger.info(f"Retrieving stateful history for thread: {thread_id}")
         config = {"configurable": {"thread_id": thread_id}}
         state = agent_orchestrator.graph.get_state(config)
-        
+
         history = []
         if state and state.values and "messages" in state.values:
             for msg in state.values["messages"]:
-                if isinstance(msg, HumanMessage) or (hasattr(msg, "type") and msg.type == "human"):
+                if isinstance(msg, HumanMessage) or (
+                    hasattr(msg, "type") and msg.type == "human"
+                ):
                     history.append({"role": "user", "content": msg.content})
-                elif isinstance(msg, AIMessage) or (hasattr(msg, "type") and msg.type == "ai"):
+                elif isinstance(msg, AIMessage) or (
+                    hasattr(msg, "type") and msg.type == "ai"
+                ):
                     history.append({"role": "assistant", "content": msg.content})
         return {"history": history}
     except Exception as e:
         logger.error(f"Error fetching stateful history: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/v1/copilotkit/info")
 @app.post("/v1/copilotkit/info")
@@ -401,5 +549,5 @@ def copilotkit_info_endpoint():
     return {
         "a2uiEnabled": False,
         "actions": [],
-        "agents": [{"agentId": "default", "templates": []}]
+        "agents": [{"agentId": "default", "templates": []}],
     }

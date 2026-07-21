@@ -28,6 +28,8 @@ spec:
               value: "agent-role"
             - name: AI_GATEWAY_URL
               value: "http://kong-kong-proxy.default.svc.cluster.local:80/v1"
+            - name: ALLOWED_ORIGINS
+              value: "http://localhost:5173,http://localhost:3000"
           resources:
             requests:
               cpu: "100m"
@@ -85,6 +87,13 @@ spec:
                 port:
                   number: 8000
           - path: /health
+            pathType: Prefix
+            backend:
+              service:
+                name: agent-core-service
+                port:
+                  number: 8000
+          - path: /config
             pathType: Prefix
             backend:
               service:

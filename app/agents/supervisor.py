@@ -1,6 +1,7 @@
 import os
 import logging
-from typing import TypedDict, Annotated, List, Optional
+from pydantic import SecretStr
+from typing import TypedDict, Annotated, List, Optional, Any
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
@@ -41,9 +42,9 @@ Examples:
 """
 
 
-class SupervisorState(TypedDict):
+class SupervisorState(TypedDict, total=False):
     messages: Annotated[List[BaseMessage], add_messages]
-    specialist: Optional[str] = None
+    specialist: Optional[str]
 
 
 class SupervisorAgent:
@@ -63,14 +64,13 @@ class SupervisorAgent:
         os.environ["_AGENT_API_KEY"] = api_key
 
         gateway_url = os.getenv(
-            "AI_GATEWAY_URL",
-            "http://kong-kong-proxy.default.svc.cluster.local:80/v1"
+            "AI_GATEWAY_URL", "http://kong-kong-proxy.default.svc.cluster.local:80/v1"
         )
 
         # Enable streaming support for the base LLM
         base_llm = ChatOpenAI(
             base_url=gateway_url,
-            api_key=api_key,
+            api_key=SecretStr(api_key),
             model="us.amazon.nova-lite-v1:0",
             temperature=0.7,
             streaming=True,
@@ -79,7 +79,7 @@ class SupervisorAgent:
         # Router LLM — low temperature, sync classification
         self.router_llm = ChatOpenAI(
             base_url=gateway_url,
-            api_key=api_key,
+            api_key=SecretStr(api_key),
             model="us.amazon.nova-lite-v1:0",
             temperature=0.0,
             streaming=False,
@@ -92,49 +92,60 @@ class SupervisorAgent:
 
         # Build supervisor state graph
         builder = StateGraph(SupervisorState)
-        
+
         # Add routing and specialist execution nodes
         builder.add_node("route", self._route_node)
         builder.add_node("infra", self._infra_node)
         builder.add_node("code", self._code_node)
         builder.add_node("research", self._research_node)
-        
+
         builder.set_entry_point("route")
-        
+
         # Add conditional edges out of route node
         builder.add_conditional_edges(
-          "route",
-          self._route_decision,
-          {
-              "INFRA": "infra",
-              "CODE": "code",
-              "RESEARCH": "research",
-          }
+            "route",
+            self._route_decision,
+            {
+                "INFRA": "infra",
+                "CODE": "code",
+                "RESEARCH": "research",
+            },
         )
-        
+
         # Connect specialists to the end point
         builder.add_edge("infra", END)
         builder.add_edge("code", END)
         builder.add_edge("research", END)
-        
+
         # Configure RDS PostgreSQL checkpointer with in-memory fallback
+        self.memory: Any = None
         if db_config and db_config.get("db_host"):
             try:
                 db_url = f"postgresql://{db_config['db_user']}:{db_config['db_password']}@{db_config['db_host']}:{db_config['db_port']}/{db_config['db_name']}"
-                logger.info(f"Connecting to Postgres checkpointer: host={db_config['db_host']}, user={db_config['db_user']}")
+                logger.info(
+                    f"Connecting to Postgres checkpointer: host={db_config['db_host']}, user={db_config['db_user']}"
+                )
                 self.pool = ConnectionPool(conninfo=db_url, max_size=10, open=True)
-                self.memory = PostgresSaver(self.pool)
+                self.memory = PostgresSaver(self.pool)  # type: ignore
                 self.memory.setup()
-                logger.info("SupervisorAgent successfully compiled with PostgresSaver checkpointer")
+                logger.info(
+                    "SupervisorAgent successfully compiled with PostgresSaver checkpointer"
+                )
             except Exception as e:
-                logger.error(f"Failed to initialize PostgresSaver checkpointer: {e}. Falling back to MemorySaver.")
+                logger.error(
+                    f"Failed to initialize PostgresSaver checkpointer: {e}. Falling back to MemorySaver."
+                )
                 self.memory = MemorySaver()
         else:
-            logger.info("Initializing SupervisorAgent with local MemorySaver checkpointer")
+            logger.info(
+                "Initializing SupervisorAgent with local MemorySaver checkpointer"
+            )
             self.memory = MemorySaver()
 
         # Set human-in-the-loop interrupts before EKS infrastructure specialist runs
-        self.graph = builder.compile(checkpointer=self.memory, interrupt_before=["infra"])
+        self.graph = builder.compile(
+            checkpointer=self.memory, interrupt_before=["infra"]
+        )
 
     def _route(self, user_prompt: str) -> str:
         """Uses the router LLM to classify intent and select a specialist."""
@@ -143,7 +154,7 @@ class SupervisorAgent:
             HumanMessage(content=user_prompt),
         ]
         response = self.router_llm.invoke(routing_messages)
-        decision = response.content.strip().upper()
+        decision = str(response.content).strip().upper()
 
         # Normalise — handle verbose responses
         for key in self.SPECIALIST_MAP:
@@ -151,15 +162,19 @@ class SupervisorAgent:
                 logger.info(f"Supervisor routing '{user_prompt[:60]}' → {key}")
                 try:
                     from metrics import increment_route
+
                     increment_route(key)
                 except ImportError:
                     pass
                 return key
 
         # Default fallback
-        logger.warning(f"Could not classify intent, falling back to RESEARCH. Decision: {decision!r}")
+        logger.warning(
+            f"Could not classify intent, falling back to RESEARCH. Decision: {decision!r}"
+        )
         try:
             from metrics import increment_route
+
             increment_route("RESEARCH")
         except ImportError:
             pass
@@ -168,19 +183,21 @@ class SupervisorAgent:
     def _route_node(self, state: SupervisorState) -> dict:
         # Find the last human message in history to classify intent
         user_prompt = ""
-        for msg in reversed(state["messages"]):
-            if isinstance(msg, HumanMessage) or (hasattr(msg, "role") and msg.role == "user"):
-                user_prompt = msg.content
+        for msg in reversed(state.get("messages", [])):
+            if isinstance(msg, HumanMessage) or (
+                hasattr(msg, "role") and msg.role == "user"
+            ):
+                user_prompt = str(msg.content)
                 break
-        
+
         if not user_prompt:
             user_prompt = "explain capabilities"
-            
+
         specialist_key = self._route(user_prompt)
         return {"specialist": specialist_key}
 
     def _route_decision(self, state: SupervisorState) -> str:
-        return state["specialist"] or "RESEARCH"
+        return state.get("specialist") or "RESEARCH"
 
     async def _infra_node(self, state: SupervisorState, config: RunnableConfig) -> dict:
         response = await self.infra_agent.arun(state["messages"], config)
@@ -190,7 +207,9 @@ class SupervisorAgent:
         response = await self.code_agent.arun(state["messages"], config)
         return {"messages": [AIMessage(content=response)]}
 
-    async def _research_node(self, state: SupervisorState, config: RunnableConfig) -> dict:
+    async def _research_node(
+        self, state: SupervisorState, config: RunnableConfig
+    ) -> dict:
         response = await self.research_agent.arun(state["messages"], config)
         return {"messages": [AIMessage(content=response)]}
 
@@ -199,11 +218,12 @@ class SupervisorAgent:
         Runs the state graph synchronously for compatibility.
         """
         config = {"configurable": {"thread_id": session_id}}
-        input_data = {"messages": [HumanMessage(content=user_prompt)]} if user_prompt is not None else None
-        result = self.graph.invoke(
-            input_data,
-            config=config
+        input_data: Any = (
+            {"messages": [HumanMessage(content=user_prompt)]}
+            if user_prompt is not None
+            else None
         )
+        result = self.graph.invoke(input_data, config=config)  # type: ignore
         last_msg = result["messages"][-1]
         return last_msg.content, result.get("specialist", "RESEARCH")
 
@@ -212,38 +232,37 @@ class SupervisorAgent:
         Asynchronously streams LLM token events and specialist routing choices.
         """
         config = {"configurable": {"thread_id": session_id}}
-        input_data = {"messages": [HumanMessage(content=user_prompt)]} if user_prompt is not None else None
-        
+        input_data: Any = (
+            {"messages": [HumanMessage(content=user_prompt)]}
+            if user_prompt is not None
+            else None
+        )
+
         async for event in self.graph.astream_events(
-            input_data,
-            config=config,
-            version="v2"
+            input_data, config=config, version="v2"  # type: ignore
         ):
             # Print the event details for debugging
-            logger.info(f"astream event: name='{event.get('name')}', event='{event.get('event')}', tags={event.get('tags')}")
-            
+            logger.info(
+                f"astream event: name='{event.get('name')}', event='{event.get('event')}', tags={event.get('tags')}"
+            )
+
             # Stream the specialist classification
             if event["event"] == "on_chain_end" and event["name"] == "route":
-                output = event["data"].get("output", {})
+                output: Any = event["data"].get("output", {})
                 if isinstance(output, dict) and "specialist" in output:
-                    yield {
-                        "type": "specialist",
-                        "data": output["specialist"]
-                    }
-            
+                    yield {"type": "specialist", "data": output["specialist"]}
+
             # Stream actual chat tokens generated by subagents
             elif event["event"] == "on_chat_model_stream":
                 chunk = event["data"].get("chunk")
                 if chunk and hasattr(chunk, "content") and chunk.content:
                     try:
                         from metrics import increment_tokens
+
                         increment_tokens(1)
                     except ImportError:
                         pass
-                    yield {
-                        "type": "token",
-                        "data": chunk.content
-                    }
+                    yield {"type": "token", "data": chunk.content}
 
 
 class PipelineState(TypedDict):
@@ -262,14 +281,14 @@ class DatabricksPipelineGraph:
     State graph orchestrating the translation of BRDs into Databricks Asset Bundles
     using intermediate Business Analyst, Profiler, Conformer, and STM Mapping agents.
     """
+
     def __init__(self, api_key: str, db_config: Optional[dict] = None):
         gateway_url = os.getenv(
-            "AI_GATEWAY_URL",
-            "http://kong-kong-proxy.default.svc.cluster.local:80/v1"
+            "AI_GATEWAY_URL", "http://kong-kong-proxy.default.svc.cluster.local:80/v1"
         )
         llm = ChatOpenAI(
             base_url=gateway_url,
-            api_key=api_key,
+            api_key=SecretStr(api_key),
             model="us.amazon.nova-lite-v1:0",
             temperature=0.0,
             streaming=False,
@@ -287,31 +306,38 @@ class DatabricksPipelineGraph:
         builder.add_node("profiler", self._profiler_node)
         builder.add_node("conformer", self._conformer_node)
         builder.add_node("mapper", self._mapper_node)
+        builder.add_node("validator", self._validator_node)
         builder.add_node("dab_generator", self._dab_generator_node)
 
         builder.set_entry_point("ba_analyst")
         builder.add_edge("ba_analyst", "profiler")
         builder.add_edge("profiler", "conformer")
         builder.add_edge("conformer", "mapper")
-        
-        builder.add_edge("mapper", "dab_generator")
+        builder.add_edge("mapper", "validator")
+
+        builder.add_edge("validator", "dab_generator")
         builder.add_edge("dab_generator", END)
 
         # Configure RDS PostgreSQL checkpointer with local memory fallback
+        self.memory: Any = None
         if db_config and db_config.get("db_host"):
             try:
                 db_url = f"postgresql://{db_config['db_user']}:{db_config['db_password']}@{db_config['db_host']}:{db_config['db_port']}/{db_config['db_name']}"
                 self.pool = ConnectionPool(conninfo=db_url, max_size=10, open=True)
-                self.memory = PostgresSaver(self.pool)
+                self.memory = PostgresSaver(self.pool)  # type: ignore
                 self.memory.setup()
             except Exception as e:
-                logger.error(f"Pipeline PostgresSaver failed: {e}. Falling back to MemorySaver.")
+                logger.error(
+                    f"Pipeline PostgresSaver failed: {e}. Falling back to MemorySaver."
+                )
                 self.memory = MemorySaver()
         else:
             self.memory = MemorySaver()
 
         # Compile specifying the interrupt before the DAB Generator node
-        self.graph = builder.compile(checkpointer=self.memory, interrupt_before=["dab_generator"])
+        self.graph = builder.compile(
+            checkpointer=self.memory, interrupt_before=["dab_generator"]
+        )
 
     def _ba_analyst_node(self, state: PipelineState) -> dict:
         try:
@@ -336,10 +362,24 @@ class DatabricksPipelineGraph:
 
     def _mapper_node(self, state: PipelineState) -> dict:
         try:
-            res = self.stm_mapping.generate_mapping(state["bronze_schema"], state["silver_conformed"])
+            res = self.stm_mapping.generate_mapping(
+                state["bronze_schema"], state["silver_conformed"]
+            )
             return {"mapping_matrix": res.get("mappings", []), "approved": False}
         except Exception as e:
             return {"error": f"Mapper error: {e}"}
+
+    def _validator_node(self, state: PipelineState) -> dict:
+        try:
+            from validator import PipelineValidator
+
+            val_res = PipelineValidator.validate_mapping_matrix(
+                state.get("bronze_schema", {}), state.get("mapping_matrix", [])
+            )
+            return {"validation": val_res}
+        except Exception as e:
+            logger.error(f"Pipeline validation error: {e}")
+            return {"error": f"Validator error: {e}"}
 
     def _dab_generator_node(self, state: PipelineState) -> dict:
         try:
@@ -347,5 +387,3 @@ class DatabricksPipelineGraph:
             return {"generated_bundle_files": res.get("files", {})}
         except Exception as e:
             return {"error": f"DAB generator error: {e}"}
-
-

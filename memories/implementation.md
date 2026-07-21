@@ -121,10 +121,31 @@ To protect credit resources, we deploy our infrastructure as an ephemeral enviro
   - **Fixed stale LangGraph state collisions**: Verify script now uses a timestamp-suffixed `SESSION_ID` per run to ensure each invocation gets a fresh graph thread.
   - **Verified in-pod**: `kubectl exec` into `agent-core` pod confirmed `bronze_transaction: 5 rows`, `silver_transaction: 5 rows` with correct conformed columns (`ac_txn_id`, `customer_id_hash`, `ac_id`, `transaction_amount`, `transaction_timestamp`), SHA-256 hashed customer IDs, and DECIMAL-cast amounts.
 
+- **Phase 15a: Security Hygiene & Engineering Guardrails (Completed ✅ — 2026-07-21)**
+  - **Fail-Closed Auth Middleware**: Updated `verify_token()` in [app/main.py](file:///Users/avikaushik/agentinfra/app/main.py#L70-L127) to enforce strict JWT validation without `"default_user"` fallbacks, return 401/503 status codes, verify `aud`/`client_id` claims, and gate dev bypass behind `DEV_BYPASS_AUTH="true"`.
+  - **Static Bedrock Key Elimination**: Deleted `aws_iam_user.bedrock_user` and `aws_iam_access_key.bedrock_user_key` in [infra/terraform/eks.tf](file:///Users/avikaushik/agentinfra/infra/terraform/eks.tf); scoped node group Bedrock policy from `AmazonBedrockFullAccess` to `bedrock:InvokeModel` / `bedrock:InvokeModelWithResponseStream` on foundation models.
+  - **RDS Password Rotation**: Replaced hardcoded password string with Terraform `random_password.rds_password` resource in [infra/terraform/rds.tf](file:///Users/avikaushik/agentinfra/infra/terraform/rds.tf) and marked outputs sensitive.
+  - **Makefile Automation**: Updated `write-secret` and `configure-bedrock-auth` targets to write dynamic RDS/Cognito secrets to Vault KV and generate keyless IMDS Kong AI Gateway secrets.
+  - **Frontend Runtime Config & CORS Scoping**: Added `/config` endpoint in FastAPI, updated [frontend/src/App.jsx](file:///Users/avikaushik/agentinfra/frontend/src/App.jsx) (`npm run build` green), and removed wildcard `*` from `ALLOWED_ORIGINS` in [infra/k8s/agent-deployment.yaml](file:///Users/avikaushik/agentinfra/infra/k8s/agent-deployment.yaml) (`"http://localhost:5173,http://localhost:3000"`).
+  - **Automated CI/CD & Test Suite**: Added GitHub Actions workflow [.github/workflows/ci.yml](file:///Users/avikaushik/agentinfra/.github/workflows/ci.yml) with unbypassed quality gates (`ruff`, `black`, `mypy` with 0 errors across 20 source files, `pytest` under `PYTHONPATH=app:.`, `terraform validate`, `gitleaks`) and pytest suite in `tests/` (20 passing tests).
+
+- **Phase 17: Grounded Canonical Model Service (Completed ✅ — 2026-07-21)**
+  - **Canonical Model Store & Vector Distance Scoring**: Created [app/canonical_store.py](file:///Users/avikaushik/agentinfra/app/canonical_store.py) (`CanonicalModelStore`) containing enterprise canonical entities (`INDIVIDUAL`, `DEPOSIT_ACCOUNT`, `FINANCIAL_TRANSACTION`) with character n-gram cosine vector similarity scoring in `search_attributes()`.
+  - **Grounded Conformer Agent**: Updated `SilverModelAgent` in [app/agents/silver_model_agent.py](file:///Users/avikaushik/agentinfra/app/agents/silver_model_agent.py) to retrieve grounded candidates and return confidence scores for each mapped column.
+
+- **Phase 18: Deterministic Validation, Pydantic Contracts & Eval Harness (Completed ✅ — 2026-07-21)**
+  - **Pydantic Contracts & Transform DSL**: Created [app/contracts.py](file:///Users/avikaushik/agentinfra/app/contracts.py) defining output schemas across all 5 agents (`ValueStreamContract`, `BronzeSchemaContract`, `SilverConformedContract`, `MappingMatrixContract`, `DABBundleContract`) and `TransformDSL` enum.
+  - **Deterministic Validator & Re-validation**: Created [app/validator.py](file:///Users/avikaushik/agentinfra/app/validator.py) (`PipelineValidator`) checking 100% column coverage, type safety, and target name collisions. Wired `PipelineValidator` node into `DatabricksPipelineGraph` in [app/agents/supervisor.py](file:///Users/avikaushik/agentinfra/app/agents/supervisor.py), exposed validation metrics in `/pipeline/analyse`, and added mandatory re-validation on human-edited mappings in `/pipeline/approve`.
+  - **Bounded Repair Loop**: Implemented Pydantic contract validation with up to 3-attempt repair loops across all 5 pipeline agents ([ba_analyst_agent.py](file:///Users/avikaushik/agentinfra/app/agents/ba_analyst_agent.py), [data_profiler_agent.py](file:///Users/avikaushik/agentinfra/app/agents/data_profiler_agent.py), [silver_model_agent.py](file:///Users/avikaushik/agentinfra/app/agents/silver_model_agent.py), [stm_mapping_agent.py](file:///Users/avikaushik/agentinfra/app/agents/stm_mapping_agent.py), [dab_generator_agent.py](file:///Users/avikaushik/agentinfra/app/agents/dab_generator_agent.py)).
+  - **Golden Evaluation Harness**: Created [app/eval_harness.py](file:///Users/avikaushik/agentinfra/app/eval_harness.py) (`MappingEvalHarness`) calculating precision, recall, and F1 score against golden BRD baselines.
+
+- **Phase 19: Real Execution Target & Medallion Pipeline Engine (Completed ✅ — 2026-07-21)**
+  - **True Medallion Architecture**: Updated [app/pipeline_runner.py](file:///Users/avikaushik/agentinfra/app/pipeline_runner.py) for raw append-only Bronze ingestion, primary-key MERGE/upsert Silver ingestion (`ON CONFLICT DO UPDATE`), case-insensitive column lookup, and DQ row quarantine table (`quarantine_*`).
+  - **Primary Key Constraint Safety**: Added schema inspection of `information_schema.table_constraints` in PostgreSQL to preserve existing table PRIMARY KEY constraints on re-runs and prevent `ON CONFLICT` mismatch errors. Tested directly with mock DB connection in [tests/test_pipeline_runner.py](file:///Users/avikaushik/agentinfra/tests/test_pipeline_runner.py).
+
 ## Planned Next Phases
 
-- **Phase 15: Git-Tracked CI/CD with Jenkins Linting** — Implement `Jenkinsfile` with flake8/black/yamllint stages and DAB bundle deployment stages. Jenkins runs free via EC2 self-hosted or GitHub Actions.
-- **Phase 16: EKS Nova Model Billing Tagging & Budget Alerts** — Configure cost allocation tags and configure EKS config tags on Amazon Bedrock requests.
-- **Phase 17: Multi-Region PostgreSQL Replication** — Build read replicas for postgres database to support low-latency global state loads.
-- **Phase 18: LangSmith Observability Integration** — Connect EKS pods to LangSmith trace collection instances to audit agent reasoning loops.
+- **Phase 15b: Full Identity & Transport Hardening** — Dedicated per-workload IRSA ServiceAccounts, production Raft Vault auto-unseal, and HTTPS edge TLS certs.
+- **Phase 16: Multi-Tenant Data Governance & RLS** — Postgres Row-Level Security on tenant state, Cognito group custom claims, and immutable state audit log.
+- **Phase 20: Model Router & Cost Tiering** — Model routing (Claude for reasoning/codegen vs Haiku/Nova for cheap steps), per-tenant token quotas, and run cost tracking.
 

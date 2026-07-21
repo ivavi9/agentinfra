@@ -2,8 +2,22 @@ import { useState, useRef, useEffect } from 'react'
 import { CopilotKit, useCopilotReadable } from '@copilotkit/react-core'
 import './App.css'
 
-// Define the public Kong LoadBalancer gateway URL
-const GATEWAY_URL = 'http://a90fb1d5f715a4159abc7483e774bd8d-498703573.us-east-1.elb.amazonaws.com'
+// Dynamic runtime configuration with fallback to environment / origin
+export let GATEWAY_URL = window.__RUNTIME_CONFIG__?.API_URL || import.meta.env.VITE_API_URL || 'http://localhost:8000'
+export let COGNITO_CLIENT_ID = window.__RUNTIME_CONFIG__?.COGNITO_CLIENT_ID || import.meta.env.VITE_COGNITO_CLIENT_ID || '5f6s8b6ur4bokfnucs98ieds3p'
+
+export async function loadRuntimeConfig() {
+  try {
+    const res = await fetch(`${GATEWAY_URL}/config`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.cognito_client_id) COGNITO_CLIENT_ID = data.cognito_client_id;
+      if (data.api_url) GATEWAY_URL = data.api_url;
+    }
+  } catch (e) {
+    console.warn("Using fallback client config:", e);
+  }
+}
 
 // Parser for inline elements: **bold** and `code`
 const parseInlineMarkdown = (text) => {
@@ -1310,7 +1324,7 @@ function AuthScreen({ onLoginSuccess }) {
     try {
       if (authMode === 'login') {
         const data = await handleCognitoRequest('InitiateAuth', {
-          ClientId: '5f6s8b6ur4bokfnucs98ieds3p',
+          ClientId: COGNITO_CLIENT_ID,
           AuthFlow: 'USER_PASSWORD_AUTH',
           AuthParameters: {
             USERNAME: email,
@@ -1322,7 +1336,7 @@ function AuthScreen({ onLoginSuccess }) {
         onLoginSuccess(token, refreshToken)
       } else if (authMode === 'signup') {
         await handleCognitoRequest('SignUp', {
-          ClientId: '5f6s8b6ur4bokfnucs98ieds3p',
+          ClientId: COGNITO_CLIENT_ID,
           Username: email,
           Password: password,
           UserAttributes: [{ Name: 'email', Value: email }]
@@ -1332,7 +1346,7 @@ function AuthScreen({ onLoginSuccess }) {
         setErrorMsg('Sign up successful! Please check your email for a verification code.')
       } else if (authMode === 'verify') {
         await handleCognitoRequest('ConfirmSignUp', {
-          ClientId: '5f6s8b6ur4bokfnucs98ieds3p',
+          ClientId: COGNITO_CLIENT_ID,
           Username: verifyEmail,
           ConfirmationCode: verifyCode
         })
@@ -1539,8 +1553,6 @@ async function refreshIdToken(clientId) {
   }
 }
 
-const COGNITO_CLIENT_ID = '5f6s8b6ur4bokfnucs98ieds3p'
-
 function App() {
   const [token, setToken] = useState(() => {
     const stored = localStorage.getItem('agent_jwt_token')
@@ -1551,8 +1563,9 @@ function App() {
     return stored || null
   })
 
-  // Auto-refresh expired token on mount and every 5 minutes
+  // Load dynamic runtime config and auto-refresh expired token on mount
   useEffect(() => {
+    loadRuntimeConfig();
     const tryRefresh = async () => {
       const current = localStorage.getItem('agent_jwt_token')
       if (current && isTokenExpired(current)) {

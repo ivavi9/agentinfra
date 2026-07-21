@@ -1,0 +1,62 @@
+name: CI Guardrails Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  quality-gate:
+    name: Code Quality & Security Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Codebase
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff black mypy pytest httpx pydantic pyjwt
+          if [ -f app/requirements.txt ]; then pip install -r app/requirements.txt; fi
+
+      - name: Run Ruff Linter
+        run: |
+          ruff check app/ tests/
+
+      - name: Run Black Code Formatter Check
+        run: |
+          black --check app/ tests/
+
+      - name: Run Mypy Static Type Analysis
+        run: |
+          mypy app/ --ignore-missing-imports
+
+      - name: Execute Pytest Suite
+        run: |
+          PYTHONPATH=app:. pytest tests/ -v
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.0
+
+      - name: Validate Terraform Infrastructure Config
+        run: |
+          cd infra/terraform
+          terraform init -backend=false
+          terraform validate
+
+      - name: Run Gitleaks Secret Scanner
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

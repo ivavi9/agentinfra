@@ -82,9 +82,16 @@ write-secret: config-check
 		echo "ERROR: API key cannot be empty"; \
 		exit 1; \
 	fi; \
-	echo "==> Writing key to Vault kv/data/secret/gemini..."; \
+	db_pass=$$(cd $(TERRAFORM_DIR) && $(TERRAFORM) output -raw rds_password); \
+	db_host=$$(cd $(TERRAFORM_DIR) && $(TERRAFORM) output -raw rds_endpoint | cut -d: -f1); \
+	db_name=$$(cd $(TERRAFORM_DIR) && $(TERRAFORM) output -raw rds_db_name); \
+	db_user=$$(cd $(TERRAFORM_DIR) && $(TERRAFORM) output -raw rds_username); \
+	pool_id=$$(cd $(TERRAFORM_DIR) && $(TERRAFORM) output -raw cognito_user_pool_id); \
+	client_id=$$(cd $(TERRAFORM_DIR) && $(TERRAFORM) output -raw cognito_client_id); \
+	cognito_ep=$$(cd $(TERRAFORM_DIR) && $(TERRAFORM) output -raw cognito_endpoint); \
+	echo "==> Writing secrets to Vault kv/data/secret/gemini..."; \
 	KUBECONFIG=$(KUBECONFIG_PATH) $(KUBECTL) exec -i vault-0 -- sh -c \
-		"VAULT_TOKEN=$(VAULT_DEV_TOKEN) vault kv put secret/gemini api_key=$$key"; \
+		"VAULT_TOKEN=$(VAULT_DEV_TOKEN) vault kv put secret/gemini api_key=$$key db_password=$$db_pass db_host=$$db_host db_name=$$db_name db_user=$$db_user db_port=5432 cognito_user_pool_id=$$pool_id cognito_client_id=$$client_id cognito_endpoint=$$cognito_ep aws_region=$(REGION)"; \
 	echo "==> Generating Kong AI Gateway secret config..."; \
 	KUBECONFIG=$(KUBECONFIG_PATH) $(KUBECTL) create secret generic gemini-ai-proxy-config \
 		--from-literal=config="{\"route_type\": \"llm/v1/chat\", \"auth\": {\"allow_override\": false, \"header_name\": \"Authorization\", \"header_value\": \"Bearer $$key\"}, \"model\": {\"provider\": \"openai\", \"name\": \"gemini-2.5-flash\", \"options\": {\"upstream_url\": \"https://generativelanguage.googleapis.com/v1beta/openai\"}}}" \
@@ -108,16 +115,9 @@ configure-vault-auth: config-check
 		"VAULT_TOKEN=$(VAULT_DEV_TOKEN) vault write auth/kubernetes/role/agent-role bound_service_account_names=agent-core-sa bound_service_account_namespaces=default policies=agent-policy ttl=24h"
 
 configure-bedrock-auth: config-check
-	@echo "==> Fetching Bedrock credentials from Terraform..."
-	@access_key=$$(cd $(TERRAFORM_DIR) && $(TERRAFORM) output -raw bedrock_access_key_id); \
-	secret_key=$$(cd $(TERRAFORM_DIR) && $(TERRAFORM) output -raw bedrock_secret_access_key); \
-	if [ -z "$$access_key" ] || [ -z "$$secret_key" ]; then \
-		echo "ERROR: Failed to retrieve Bedrock keys from Terraform outputs"; \
-		exit 1; \
-	fi; \
-	echo "==> Generating Kong Bedrock secret configuration..."; \
+	@echo "==> Generating keyless Kong Bedrock secret configuration (IMDS node role)..."
 	KUBECONFIG=$(KUBECONFIG_PATH) $(KUBECTL) create secret generic gemini-ai-proxy-config \
-		--from-literal=config="{\"route_type\": \"llm/v1/chat\", \"auth\": {\"allow_override\": false, \"aws_access_key_id\": \"$$access_key\", \"aws_secret_access_key\": \"$$secret_key\"}, \"model\": {\"provider\": \"bedrock\", \"name\": \"us.amazon.nova-lite-v1:0\", \"options\": {\"bedrock\": {\"aws_region\": \"$(REGION)\"}}}}" \
+		--from-literal=config="{\"route_type\": \"llm/v1/chat\", \"auth\": {\"allow_override\": false}, \"model\": {\"provider\": \"bedrock\", \"name\": \"us.amazon.nova-lite-v1:0\", \"options\": {\"bedrock\": {\"aws_region\": \"$(REGION)\"}}}}" \
 		--dry-run=client -o yaml | KUBECONFIG=$(KUBECONFIG_PATH) $(KUBECTL) apply -f -
 
 upload-samples: config-check

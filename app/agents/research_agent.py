@@ -1,19 +1,21 @@
 import os
 import json
 import logging
+from pydantic import SecretStr
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.prebuilt import ToolNode
 from langgraph.graph import StateGraph, END
-from typing import TypedDict, Annotated, List
+from typing import TypedDict, Annotated, List, Optional, Any
 from langgraph.graph.message import add_messages
 
 logger = logging.getLogger("research_agent")
 
 
 # ── Tools scoped to research / knowledge synthesis domain ────────────────────
+
 
 @tool
 def synthesize_knowledge(question: str, context: str = "") -> str:
@@ -26,14 +28,13 @@ def synthesize_knowledge(question: str, context: str = "") -> str:
         context: Optional extra context or constraints to guide the answer.
     """
     gateway_url = os.getenv(
-        "AI_GATEWAY_URL",
-        "http://kong-kong-proxy.default.svc.cluster.local:80/v1"
+        "AI_GATEWAY_URL", "http://kong-kong-proxy.default.svc.cluster.local:80/v1"
     )
     prompt = question if not context else f"Context: {context}\n\nQuestion: {question}"
     try:
         client = ChatOpenAI(
             base_url=gateway_url,
-            api_key=os.getenv("_AGENT_API_KEY", "placeholder"),
+            api_key=SecretStr(os.getenv("_AGENT_API_KEY") or "placeholder"),
             model="us.amazon.nova-lite-v1:0",
             temperature=0.3,
         )
@@ -53,8 +54,7 @@ def compare_concepts(concept_a: str, concept_b: str) -> str:
         concept_b: Second concept to compare.
     """
     gateway_url = os.getenv(
-        "AI_GATEWAY_URL",
-        "http://kong-kong-proxy.default.svc.cluster.local:80/v1"
+        "AI_GATEWAY_URL", "http://kong-kong-proxy.default.svc.cluster.local:80/v1"
     )
     prompt = (
         f"Produce a concise structured comparison between '{concept_a}' and '{concept_b}'. "
@@ -63,7 +63,7 @@ def compare_concepts(concept_a: str, concept_b: str) -> str:
     try:
         client = ChatOpenAI(
             base_url=gateway_url,
-            api_key=os.getenv("_AGENT_API_KEY", "placeholder"),
+            api_key=SecretStr(os.getenv("_AGENT_API_KEY") or "placeholder"),
             model="us.amazon.nova-lite-v1:0",
             temperature=0.3,
         )
@@ -77,6 +77,7 @@ RESEARCH_TOOLS = [synthesize_knowledge, compare_concepts]
 
 
 # ── Research Agent graph ──────────────────────────────────────────────────────
+
 
 class ResearchState(TypedDict):
     messages: Annotated[List[BaseMessage], add_messages]
@@ -93,14 +94,16 @@ class ResearchAgent:
     async def _call_model(self, state: ResearchState, config: RunnableConfig) -> dict:
         system_prompt = SystemMessage(
             content="You are the ResearchAgent, a specialist conceptual research and comparison subagent. "
-                    "You have tools available to synthesize knowledge (synthesize_knowledge) and compare concepts (compare_concepts). "
-                    "You MUST invoke the appropriate tool to run the comparison or synthesis before answering. "
-                    "Always call compare_concepts if comparing two topics, or synthesize_knowledge if researching a concept."
+            "You have tools available to synthesize knowledge (synthesize_knowledge) and compare concepts (compare_concepts). "
+            "You MUST invoke the appropriate tool to run the comparison or synthesis before answering. "
+            "Always call compare_concepts if comparing two topics, or synthesize_knowledge if researching a concept."
         )
         messages = [system_prompt] + state["messages"]
         for idx, msg in enumerate(messages):
-            logger.info(f"Research msg {idx}: type={type(msg)}, content={msg.content[:100]!r}, tool_calls={getattr(msg, 'tool_calls', None)}")
-        response = None
+            logger.info(
+                f"Research msg {idx}: type={type(msg)}, content={msg.content[:100]!r}, tool_calls={getattr(msg, 'tool_calls', None)}"
+            )
+        response: Any = None
         async for chunk in self.llm.astream(messages, config=config):
             if response is None:
                 response = chunk
@@ -110,7 +113,9 @@ class ResearchAgent:
 
     def _route(self, state: ResearchState) -> str:
         last = state["messages"][-1]
-        logger.info(f"Research route check: last message type={type(last)}, tool_calls={getattr(last, 'tool_calls', None)}")
+        logger.info(
+            f"Research route check: last message type={type(last)}, tool_calls={getattr(last, 'tool_calls', None)}"
+        )
         if hasattr(last, "tool_calls") and last.tool_calls:
             return "tools"
         return END
@@ -128,7 +133,11 @@ class ResearchAgent:
         result = self.graph.invoke({"messages": messages})
         ai_contents = []
         for msg in result["messages"]:
-            if isinstance(msg, AIMessage) and msg.content:
+            if (
+                isinstance(msg, AIMessage)
+                and isinstance(msg.content, str)
+                and msg.content
+            ):
                 val = msg.content.strip()
                 if val and val not in ai_contents:
                     ai_contents.append(val)
@@ -136,11 +145,17 @@ class ResearchAgent:
             return "\n\n".join(ai_contents)
         return "Research agent completed with no text output."
 
-    async def arun(self, messages: List[BaseMessage], config: RunnableConfig = None) -> str:
+    async def arun(
+        self, messages: List[BaseMessage], config: Optional[RunnableConfig] = None
+    ) -> str:
         result = await self.graph.ainvoke({"messages": messages}, config=config)
         ai_contents = []
         for msg in result["messages"]:
-            if isinstance(msg, AIMessage) and msg.content:
+            if (
+                isinstance(msg, AIMessage)
+                and isinstance(msg.content, str)
+                and msg.content
+            ):
                 val = msg.content.strip()
                 if val and val not in ai_contents:
                     ai_contents.append(val)

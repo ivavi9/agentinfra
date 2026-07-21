@@ -54,9 +54,28 @@ resource "aws_iam_role_policy_attachment" "node_AmazonEC2ContainerRegistryReadOn
   role       = aws_iam_role.node.name
 }
 
-resource "aws_iam_role_policy_attachment" "node_AmazonBedrockFullAccess" {
-  policy_arn = "arn:aws:iam::aws:policy/AmazonBedrockFullAccess"
-  role       = aws_iam_role.node.name
+# Scoped Bedrock access for EKS node role (InvokeModel only)
+resource "aws_iam_role_policy" "node_bedrock_access" {
+  name = "AgentBedrockScopedAccess"
+  role = aws_iam_role.node.name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "BedrockModelInvocation"
+        Effect   = "Allow"
+        Action   = [
+          "bedrock:InvokeModel",
+          "bedrock:InvokeModelWithResponseStream"
+        ]
+        Resource = [
+          "arn:aws:bedrock:*::foundation-model/*",
+          "arn:aws:bedrock:*:*:inference-profile/*"
+        ]
+      }
+    ]
+  })
 }
 
 # Keyless S3 access for EKS pods via node group IAM role (IRSA pattern)
@@ -148,7 +167,7 @@ resource "aws_eks_node_group" "main" {
     aws_iam_role_policy_attachment.node_AmazonEKSWorkerNodePolicy,
     aws_iam_role_policy_attachment.node_AmazonEKS_CNI_Policy,
     aws_iam_role_policy_attachment.node_AmazonEC2ContainerRegistryReadOnly,
-    aws_iam_role_policy_attachment.node_AmazonBedrockFullAccess
+    aws_iam_role_policy.node_bedrock_access
   ]
 }
 
@@ -173,21 +192,4 @@ resource "aws_ecr_repository" "agent" {
   image_scanning_configuration {
     scan_on_push = false
   }
-}
-
-# Create a dedicated IAM user for Bedrock gateway access
-resource "aws_iam_user" "bedrock_user" {
-  name          = "${var.cluster_name}-bedrock-user"
-  force_destroy = true
-}
-
-# Attach Bedrock access policy to this user
-resource "aws_iam_user_policy_attachment" "bedrock_user_access" {
-  user       = aws_iam_user.bedrock_user.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonBedrockFullAccess"
-}
-
-# Generate access keys for this user
-resource "aws_iam_access_key" "bedrock_user_key" {
-  user = aws_iam_user.bedrock_user.name
 }
