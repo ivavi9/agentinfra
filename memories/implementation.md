@@ -143,6 +143,12 @@ To protect credit resources, we deploy our infrastructure as an ephemeral enviro
   - **True Medallion Architecture**: Updated [app/pipeline_runner.py](file:///Users/avikaushik/agentinfra/app/pipeline_runner.py) for raw append-only Bronze ingestion, primary-key MERGE/upsert Silver ingestion (`ON CONFLICT DO UPDATE`), case-insensitive column lookup, and DQ row quarantine table (`quarantine_*`).
   - **Primary Key Constraint Safety**: Added schema inspection of `information_schema.table_constraints` in PostgreSQL to preserve existing table PRIMARY KEY constraints on re-runs and prevent `ON CONFLICT` mismatch errors. Tested directly with mock DB connection in [tests/test_pipeline_runner.py](file:///Users/avikaushik/agentinfra/tests/test_pipeline_runner.py).
 
+- **Model Context Protocol (MCP) AWS S3 Tool Integration (Completed ✅ — 2026-07-21)**
+  - **FastMCP S3 Server**: Created [app/mcp_s3_server.py](file:///Users/avikaushik/agentinfra/app/mcp_s3_server.py) (`MCPS3Server`) providing JSON-RPC 2.0 standard MCP tools (`s3_discover_landing_bucket`, `s3_list_raw_assets`, `s3_read_json_records`) operating keylessly via EKS Pod IRSA `boto3`.
+  - **MCP Client Adapter**: Created [app/mcp_client.py](file:///Users/avikaushik/agentinfra/app/mcp_client.py) (`MCPS3ClientAdapter`) converting MCP S3 tools into LangChain/LangGraph `StructuredTool` objects.
+  - **Runner Ingestion Delegation**: Integrated `MCPS3ClientAdapter` into `PipelineRunner` in [app/pipeline_runner.py](file:///Users/avikaushik/agentinfra/app/pipeline_runner.py) with direct boto3 fallback.
+  - **MCP Unit Test Suite**: Created [tests/test_mcp_s3_server.py](file:///Users/avikaushik/agentinfra/tests/test_mcp_s3_server.py) (23 total passing tests in suite).
+
 ## Planned Next Phases
 
 - **Phase 15b: Full Identity & Transport Hardening** — Dedicated per-workload IRSA ServiceAccounts, production Raft Vault auto-unseal, and HTTPS edge TLS certs.

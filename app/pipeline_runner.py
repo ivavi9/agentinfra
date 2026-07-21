@@ -6,6 +6,8 @@ import psycopg
 
 from typing import Optional, Dict, Any
 
+from mcp_client import MCPS3ClientAdapter
+
 logger = logging.getLogger("agent-core.pipeline_runner")
 
 
@@ -14,22 +16,22 @@ class PipelineRunner:
         self.db_config = db_config
         # Standard boto3 client resolves EKS SA OIDC IRSA keylessly
         self.s3_client = boto3.client("s3")
+        self.mcp_client = MCPS3ClientAdapter()
 
     def discover_landing_bucket(self) -> str:
-        """Discovers the landing bucket dynamically by listing buckets matching prefix."""
+        """Discovers landing bucket dynamically via MCP S3 Server."""
         try:
+            return self.mcp_client.discover_landing_bucket()
+        except Exception as e:
+            logger.warning(f"MCP bucket discovery fallback to boto3: {e}")
             buckets = self.s3_client.list_buckets()
             for b in buckets.get("Buckets", []):
                 name = b["Name"]
                 if name.startswith("agent-infra-landing-bucket-"):
-                    logger.info(f"Discovered landing bucket: {name}")
                     return name
             raise FileNotFoundError(
                 "No bucket found matching prefix 'agent-infra-landing-bucket-'"
             )
-        except Exception as e:
-            logger.error(f"Failed to discover landing bucket: {str(e)}")
-            raise e
 
     def _get_connection(self):
         conn_info = (
@@ -42,9 +44,12 @@ class PipelineRunner:
         return psycopg.connect(conn_info)
 
     def download_s3_json(self, bucket: str, key: str) -> list:
-        """Downloads a JSON Lines file from S3 and parses it into records."""
-        logger.info(f"Downloading s3://{bucket}/{key}")
+        """Downloads and parses JSON/JSONL raw data records from S3 via MCP tool."""
+        logger.info(f"Downloading s3://{bucket}/{key} via MCP S3 Server")
         try:
+            return self.mcp_client.read_json_records(bucket, key)
+        except Exception as e:
+            logger.warning(f"MCP S3 read failed, fallback to direct boto3: {e}")
             response = self.s3_client.get_object(Bucket=bucket, Key=key)
             content = response["Body"].read().decode("utf-8")
             records = []
@@ -52,9 +57,6 @@ class PipelineRunner:
                 if line.strip():
                     records.append(json.loads(line.strip()))
             return records
-        except Exception as e:
-            logger.error(f"Failed to download or parse s3://{bucket}/{key}: {str(e)}")
-            raise e
 
     def run_conformance(
         self, entity_name: str, mappings: list, bucket: Optional[str] = None
