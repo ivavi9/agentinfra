@@ -90,3 +90,24 @@ def test_audit_logs_endpoint(monkeypatch):
     assert len(logs) == 1
     assert logs[0]["tenant_id"] == "tenant-finance"
     assert logs[0]["action"] == "PIPELINE_ANALYSE"
+
+
+def test_rls_ddl_and_tenant_session_execution():
+    class DummyCursor:
+        def __init__(self):
+            self.executed = []
+
+        def execute(self, sql, params=None):
+            self.executed.append((sql, params))
+
+    cur = DummyCursor()
+    TenantIsolationManager.enable_table_rls(cur, "silver_tenant_alpha_transaction")
+    assert len(cur.executed) == 4
+    assert "ENABLE ROW LEVEL SECURITY" in cur.executed[1][0]
+    assert "CREATE POLICY tenant_isolation_policy" in cur.executed[3][0]
+
+    cur_session = DummyCursor()
+    TenantIsolationManager.set_tenant_session(cur_session, "tenant-finance")
+    assert len(cur_session.executed) == 1
+    assert "app.current_tenant" in cur_session.executed[0][0]
+    assert cur_session.executed[0][1] == ("tenant-finance",)

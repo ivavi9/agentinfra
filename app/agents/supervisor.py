@@ -19,6 +19,7 @@ from .data_profiler_agent import DataProfilerAgent
 from .silver_model_agent import SilverModelAgent
 from .stm_mapping_agent import STMMappingAgent
 from .dab_generator_agent import DABGeneratorAgent
+from model_router import ModelRouter
 
 logger = logging.getLogger("supervisor")
 
@@ -67,11 +68,13 @@ class SupervisorAgent:
             "AI_GATEWAY_URL", "http://kong-kong-proxy.default.svc.cluster.local:80/v1"
         )
 
+        base_model = ModelRouter.get_model_for_task("routing")
+
         # Enable streaming support for the base LLM
         base_llm = ChatOpenAI(
             base_url=gateway_url,
             api_key=SecretStr(api_key),
-            model="us.amazon.nova-lite-v1:0",
+            model=base_model,
             temperature=0.7,
             streaming=True,
         )
@@ -80,7 +83,7 @@ class SupervisorAgent:
         self.router_llm = ChatOpenAI(
             base_url=gateway_url,
             api_key=SecretStr(api_key),
-            model="us.amazon.nova-lite-v1:0",
+            model=base_model,
             temperature=0.0,
             streaming=False,
         )
@@ -286,19 +289,29 @@ class DatabricksPipelineGraph:
         gateway_url = os.getenv(
             "AI_GATEWAY_URL", "http://kong-kong-proxy.default.svc.cluster.local:80/v1"
         )
-        llm = ChatOpenAI(
+        ba_model = ModelRouter.get_model_for_task("ba_analysis")
+        codegen_model = ModelRouter.get_model_for_task("codegen")
+
+        llm_ba = ChatOpenAI(
             base_url=gateway_url,
             api_key=SecretStr(api_key),
-            model="us.amazon.nova-lite-v1:0",
+            model=ba_model,
+            temperature=0.0,
+            streaming=False,
+        )
+        llm_codegen = ChatOpenAI(
+            base_url=gateway_url,
+            api_key=SecretStr(api_key),
+            model=codegen_model,
             temperature=0.0,
             streaming=False,
         )
 
-        self.ba_analyst = BAAnalystAgent(llm)
-        self.data_profiler = DataProfilerAgent(llm)
-        self.silver_model = SilverModelAgent(llm)
-        self.stm_mapping = STMMappingAgent(llm)
-        self.dab_generator = DABGeneratorAgent(llm)
+        self.ba_analyst = BAAnalystAgent(llm_ba)
+        self.data_profiler = DataProfilerAgent(llm_ba)
+        self.silver_model = SilverModelAgent(llm_ba)
+        self.stm_mapping = STMMappingAgent(llm_codegen)
+        self.dab_generator = DABGeneratorAgent(llm_codegen)
 
         # Build Graph
         builder = StateGraph(PipelineState)

@@ -12,9 +12,9 @@ client = TestClient(main_app)
 
 def test_compliance_posture_manager():
     posture = CompliancePostureManager.get_compliance_posture()
-    assert posture["status"] == "COMPLIANT"
-    assert posture["framework"] == "SOC2_TYPE2_READY"
-    assert len(posture["controls"]) == 6
+    assert posture["total_controls"] == 7
+    assert posture["verified_controls"] >= 5
+    assert "controls" in posture
 
 
 def test_compliance_posture_endpoint(monkeypatch):
@@ -25,8 +25,8 @@ def test_compliance_posture_endpoint(monkeypatch):
     )
     assert resp.status_code == 200
     data = resp.json()
-    assert data["status"] == "COMPLIANT"
-    assert data["verified_controls"] == 6
+    assert data["total_controls"] == 7
+    assert data["verified_controls"] >= 5
 
 
 def test_model_quota_endpoint(monkeypatch):

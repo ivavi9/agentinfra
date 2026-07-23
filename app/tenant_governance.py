@@ -127,3 +127,35 @@ class TenantIsolationManager:
             "payload": sanitized_payload,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
+
+    @classmethod
+    def enable_table_rls(cls, cur: Any, table_name: str) -> None:
+        """Executes DDL to enable Row-Level Security (RLS) on a target PostgreSQL table."""
+        try:
+            cur.execute(
+                f"ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS tenant_id VARCHAR(64);"
+            )
+            cur.execute(f"ALTER TABLE {table_name} ENABLE ROW LEVEL SECURITY;")
+            cur.execute(
+                f"DROP POLICY IF EXISTS tenant_isolation_policy ON {table_name};"
+            )
+            cur.execute(
+                f"""
+                CREATE POLICY tenant_isolation_policy ON {table_name}
+                    USING (tenant_id = current_setting('app.current_tenant', true))
+                    WITH CHECK (tenant_id = current_setting('app.current_tenant', true));
+                """
+            )
+            logger.info(f"Successfully enabled RLS policy on table: {table_name}")
+        except Exception as e:
+            logger.warning(f"Could not apply RLS DDL to {table_name}: {e}")
+
+    @classmethod
+    def set_tenant_session(cls, cur: Any, tenant_id: str) -> None:
+        """Sets the PostgreSQL session variable app.current_tenant for RLS enforcement."""
+        try:
+            cur.execute(
+                "SELECT set_config('app.current_tenant', %s, true);", (tenant_id,)
+            )
+        except Exception as e:
+            logger.warning(f"Could not set app.current_tenant session config: {e}")

@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 from vault_client import VaultSecretsManager
 from tenant_governance import PIIRedactor, TenantIsolationManager
+from model_router import QuotaManager
 from agent import LangGraphAgent
 from langchain_core.messages import HumanMessage, AIMessage
 
@@ -279,12 +280,21 @@ def get_audit_logs(user_ctx: UserContext = Depends(verify_token)):
     return {"status": "SUCCESS", "tenant_id": user_ctx.tenant_id, "logs": logs}
 
 
+_quota_mgr = QuotaManager()
+
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat_endpoint(
     request: ChatRequest, user_ctx: UserContext = Depends(verify_token)
 ):
     if agent_orchestrator is None:
         raise HTTPException(status_code=503, detail="Agent logic not initialized")
+
+    if not _quota_mgr.check_quota(user_ctx.tenant_id):
+        raise HTTPException(
+            status_code=429,
+            detail=f"Daily token quota exceeded for tenant '{user_ctx.tenant_id}'. Contact administrator.",
+        )
 
     try:
         session_id = request.session_id or "default"

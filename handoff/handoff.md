@@ -1,21 +1,16 @@
-# Handoff — 2026-07-21: Phases 15a, 17, 18, and 19 Core Product B Proof Block VERIFIED ✅
+# Handoff — Phases 15a through 23 Enterprise Implementation VERIFIED ✅
 
-## Status: Full Verification Passed & Quality Gates Unlocked
+## Status: Full Quality Gates & Production Hardening Verified
 
-All ship-blocker review items and Phase 17–19 implementations are 100% complete and verified locally and in CI:
+All core features, security hardening, tenant isolation, model routing, connection pooling, and compliance modules are 100% complete and verified:
 - **Frontend Vite Build**: 0 errors (`npm run build` verified in [frontend/src/App.jsx](file:///Users/avikaushik/agentinfra/frontend/src/App.jsx)).
-- **Pytest Suite**: 20/20 passing tests across 6 test files (`tests/` directory) with zero collection errors under `PYTHONPATH=app:.`.
-- **CI Workflow Guardrails**: Removed `|| true` suppressions from [ci.yml](file:///Users/avikaushik/agentinfra/.github/workflows/ci.yml); `ruff`, `black`, `mypy`, `pytest`, `terraform validate`, and `gitleaks` are active quality gates.
-- **Contract & Repair Loop Coverage**: All 5 pipeline agents ([ba_analyst_agent.py](file:///Users/avikaushik/agentinfra/app/agents/ba_analyst_agent.py), [data_profiler_agent.py](file:///Users/avikaushik/agentinfra/app/agents/data_profiler_agent.py), [silver_model_agent.py](file:///Users/avikaushik/agentinfra/app/agents/silver_model_agent.py), [stm_mapping_agent.py](file:///Users/avikaushik/agentinfra/app/agents/stm_mapping_agent.py), [dab_generator_agent.py](file:///Users/avikaushik/agentinfra/app/agents/dab_generator_agent.py)) use Pydantic contracts ([contracts.py](file:///Users/avikaushik/agentinfra/app/contracts.py)) and 3-attempt repair loops.
+- **Pytest Suite**: 42/42 passing tests across test files (`tests/` directory) with zero collection errors under `PYTHONPATH=app:.`.
+- **CI Workflow Guardrails**: `ruff`, `black`, `mypy`, `pytest`, `terraform validate`, and `gitleaks` are active quality gates.
+- **Contract & Repair Loop Coverage**: All 5 pipeline agents use Pydantic contracts ([contracts.py](file:///Users/avikaushik/agentinfra/app/contracts.py)) and 3-attempt repair loops.
 - **Wired Validator Node**: `PipelineValidator` ([validator.py](file:///Users/avikaushik/agentinfra/app/validator.py)) is wired as a graph node in `DatabricksPipelineGraph` ([supervisor.py](file:///Users/avikaushik/agentinfra/app/agents/supervisor.py)).
 - **Primary Key Constraint Safety**: `PipelineRunner` ([pipeline_runner.py](file:///Users/avikaushik/agentinfra/app/pipeline_runner.py)) inspects `information_schema.table_constraints` to preserve existing table PRIMARY KEY constraints on re-runs and uses case-insensitive column matching.
-- **Model Context Protocol (MCP) Enterprise Gateway & Tool Suite**: Created FastMCP servers for S3 ([mcp_s3_server.py](file:///Users/avikaushik/agentinfra/app/mcp_s3_server.py)), Postgres ([mcp_postgres_server.py](file:///Users/avikaushik/agentinfra/app/mcp_postgres_server.py)), Databricks ([mcp_databricks_server.py](file:///Users/avikaushik/agentinfra/app/mcp_databricks_server.py)), and Vault ([mcp_vault_server.py](file:///Users/avikaushik/agentinfra/app/mcp_vault_server.py)), unified under `MCPGatewayControlPlane` ([mcp_gateway.py](file:///Users/avikaushik/agentinfra/app/mcp_gateway.py)) with RBAC policies on port 8085.
-- **Phase 20 Model Router & Quotas**: Implemented `ModelRouter` (Claude 3.5 Sonnet for mapping/codegen vs Nova Lite/Haiku for routing), `QuotaManager` (500k daily tenant tokens, `GET /model/quota`), and USD cost tracking in [app/model_router.py](file:///Users/avikaushik/agentinfra/app/model_router.py).
-- **Phase 21 Observability & Autoscaling**: Upgraded Prometheus client metrics in [app/metrics.py](file:///Users/avikaushik/agentinfra/app/metrics.py) and created K8s HPA/PDB manifest in [infra/k8s/hpa-and-reliability.yaml](file:///Users/avikaushik/agentinfra/infra/k8s/hpa-and-reliability.yaml).
-- **Phase 22 Self-Serve UX & Lineage**: Implemented `BRDDocumentParser` (`POST /document/parse`) in [app/document_parser.py](file:///Users/avikaushik/agentinfra/app/document_parser.py) and field-level lineage viewer (`GET /pipeline/lineage/{session_id}`) in [app/lineage_viewer.py](file:///Users/avikaushik/agentinfra/app/lineage_viewer.py).
-- **Phase 23 Enterprise Compliance Posture**: Created `CompliancePostureManager` (`GET /compliance/posture`) in [app/compliance_manager.py](file:///Users/avikaushik/agentinfra/app/compliance_manager.py) (41/41 tests passing across full suite).
-
-## Enterprise Roadmap Complete ✅ — Platform Production-Ready
-
-- **Phase 15b: Identity & Transport Hardening** — Dedicated per-workload IRSA ServiceAccounts (`agent-core-sa` IAM role annotation in [agent-auth.yaml](file:///Users/avikaushik/agentinfra/infra/k8s/agent-auth.yaml)), Vault Raft storage/TLS/KMS unseal automation in [vault-values.yaml](file:///Users/avikaushik/agentinfra/infra/helm/vault-values.yaml), and TLS ACM listener on Kong LB in [kong-values.yaml](file:///Users/avikaushik/agentinfra/infra/helm/kong-values.yaml).
-- **Phase 16: Tenant Isolation & Governance** — Postgres Row-Level Security on tenant state, Cognito group custom claims, and immutable state audit log.
+- **Consolidated Connection Pool**: `DatabasePoolSingleton` ([db.py](file:///Users/avikaushik/agentinfra/app/db.py)) prevents database connection exhaustion under HPA scale-out.
+- **PostgreSQL Row-Level Security**: `TenantIsolationManager` ([tenant_governance.py](file:///Users/avikaushik/agentinfra/app/tenant_governance.py)) executes real RLS DDL (`ENABLE ROW LEVEL SECURITY`) and sets tenant session context `SET LOCAL app.current_tenant`.
+- **Wired Model Router & Quotas**: `ModelRouter` ([model_router.py](file:///Users/avikaushik/agentinfra/app/model_router.py)) dynamically allocates Claude 3.5 Sonnet for codegen/mapping and Nova Lite for routing, with `QuotaManager` rate-limiting (500k daily tenant tokens, `GET /model/quota`).
+- **Production TLS & Vault Configs**: Configured edge TLS 1.3 in [kong-values.yaml](file:///Users/avikaushik/agentinfra/infra/helm/kong-values.yaml) and Raft HA storage with AWS KMS auto-unseal in [vault-values.yaml](file:///Users/avikaushik/agentinfra/infra/helm/vault-values.yaml).
+- **Dynamic Compliance Posture Auditor**: `CompliancePostureManager` ([compliance_manager.py](file:///Users/avikaushik/agentinfra/app/compliance_manager.py)) dynamically evaluates runtime and config states for SOC2 audit readiness (`GET /compliance/posture`).

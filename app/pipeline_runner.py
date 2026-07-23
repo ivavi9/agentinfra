@@ -95,6 +95,13 @@ class PipelineRunner:
         # 2. Establish database connection
         with self._get_connection() as conn:
             with conn.cursor() as cur:
+                if tenant_id:
+                    try:
+                        from tenant_governance import TenantIsolationManager
+
+                        TenantIsolationManager.set_tenant_session(cur, tenant_id)
+                    except Exception as e:
+                        logger.warning(f"Could not set tenant session: {e}")
                 # Determine table schemas based on mappings — deduplicate target columns
                 seen_cols = {}  # col_name_lower -> (col_name, db_type)
                 for m in mappings:
@@ -211,6 +218,16 @@ class PipelineRunner:
                 cur.execute(
                     f"CREATE TABLE IF NOT EXISTS {quarantine_table} ({', '.join(conformed_columns)}, _rejection_reason VARCHAR(255))"
                 )
+
+                if tenant_id:
+                    try:
+                        from tenant_governance import TenantIsolationManager
+
+                        TenantIsolationManager.enable_table_rls(cur, bronze_table)
+                        TenantIsolationManager.enable_table_rls(cur, silver_table)
+                        TenantIsolationManager.enable_table_rls(cur, quarantine_table)
+                    except Exception as e:
+                        logger.warning(f"Could not enable RLS on medallion tables: {e}")
 
                 inserted_count = 0
                 quarantined_count = 0
