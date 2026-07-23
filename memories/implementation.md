@@ -153,9 +153,16 @@ To protect credit resources, we deploy our infrastructure as an ephemeral enviro
   - **Kubernetes Gateway Deployment**: Created [infra/k8s/mcp-gateway-deployment.yaml](file:///Users/avikaushik/agentinfra/infra/k8s/mcp-gateway-deployment.yaml) deploying `mcp-gateway` microservice on port 8085 with liveness/readiness probes.
   - **Complete MCP Test Suite**: Added unit tests in [tests/test_mcp_gateway.py](file:///Users/avikaushik/agentinfra/tests/test_mcp_gateway.py), [tests/test_mcp_servers.py](file:///Users/avikaushik/agentinfra/tests/test_mcp_servers.py), and [tests/test_mcp_s3_server.py](file:///Users/avikaushik/agentinfra/tests/test_mcp_s3_server.py) (**30 total passing tests across suite**).
 
+- **Phase 15b: Full Identity & Transport Hardening (Completed ✅ — 2026-07-23)**
+  - **Per-Workload IRSA**: Updated [infra/terraform/eks.tf](file:///Users/avikaushik/agentinfra/infra/terraform/eks.tf) adding dedicated IRSA IAM roles (`agent-core-irsa-role`, `AgentCoreIRSAPolicy`) for `agent-core-sa` ServiceAccount with scoped S3 landing bucket and Bedrock invocation permissions. Verified `serviceAccountName: agent-core-sa` in [infra/k8s/agent-deployment.yaml](file:///Users/avikaushik/agentinfra/infra/k8s/agent-deployment.yaml).
+
+- **Phase 16: Tenant Isolation & Data Governance (Completed ✅ — 2026-07-23)**
+  - **Multi-Tenant Context & Thread Scoping**: Updated `verify_token` in [app/main.py](file:///Users/avikaushik/agentinfra/app/main.py) to extract `tenant_id` (from Cognito claim or `X-Tenant-ID` header) returning `UserContext`. Scoped LangGraph thread IDs as `f"{tenant_id}:{user_id}:{session_id}"`.
+  - **Pre-Prompt PII Redaction**: Created `PIIRedactor` in [app/tenant_governance.py](file:///Users/avikaushik/agentinfra/app/tenant_governance.py) automatically sanitizing SSN, credit cards, emails, and phone numbers before sending prompts/payloads to external LLMs.
+  - **Immutable Audit Event Logging**: Created `TenantIsolationManager` in [app/tenant_governance.py](file:///Users/avikaushik/agentinfra/app/tenant_governance.py) recording immutable audit entries (`audit_id`, `tenant_id`, `actor`, `action`, `resource`, `input_hash`, `timestamp`) and exposed `GET /audit/logs` endpoint in [app/main.py](file:///Users/avikaushik/agentinfra/app/main.py).
+  - **Tenant Data Partitioning**: Updated `PipelineRunner` in [app/pipeline_runner.py](file:///Users/avikaushik/agentinfra/app/pipeline_runner.py) to enforce tenant path partitioning on S3 (`s3://<bucket>/<tenant_id>/raw/...`) and PostgreSQL target tables (`bronze_<tenant_id>_*`, `silver_<tenant_id>_*`, `quarantine_<tenant_id>_*`).
+  - **Tenant Test Suite**: Created [tests/test_tenant_isolation.py](file:///Users/avikaushik/agentinfra/tests/test_tenant_isolation.py) (**33 total passing tests across suite**).
+
 ## Planned Next Phases
 
-- **Phase 15b: Full Identity & Transport Hardening** — Dedicated per-workload IRSA ServiceAccounts, production Raft Vault auto-unseal, and HTTPS edge TLS certs.
-- **Phase 16: Multi-Tenant Data Governance & RLS** — Postgres Row-Level Security on tenant state, Cognito group custom claims, and immutable state audit log.
 - **Phase 20: Model Router & Cost Tiering** — Model routing (Claude for reasoning/codegen vs Haiku/Nova for cheap steps), per-tenant token quotas, and run cost tracking.
-

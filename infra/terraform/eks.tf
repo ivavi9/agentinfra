@@ -193,3 +193,58 @@ resource "aws_ecr_repository" "agent" {
     scan_on_push = false
   }
 }
+
+# Dedicated IRSA IAM Role for agent-core Pod ServiceAccount
+resource "aws_iam_role" "agent_core_irsa" {
+  name = "agent-core-irsa-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Federated = aws_iam_openid_connect_provider.eks.arn
+        }
+        Action = "sts:AssumeRoleWithWebIdentity"
+        Condition = {
+          StringEquals = {
+            "${replace(aws_iam_openid_connect_provider.eks.url, "https://", "")}:sub" = "system:serviceaccount:default:agent-core-sa"
+            "${replace(aws_iam_openid_connect_provider.eks.url, "https://", "")}:aud" = "sts.amazonaws.com"
+          }
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "agent_core_irsa_policy" {
+  name = "AgentCoreIRSAPolicy"
+  role = aws_iam_role.agent_core_irsa.name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:ListBucket"
+        ]
+        Resource = [
+          "arn:aws:s3:::agent-infra-landing-bucket-*",
+          "arn:aws:s3:::agent-infra-landing-bucket-*/*"
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "bedrock:InvokeModel",
+          "bedrock:InvokeModelWithResponseStream"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}

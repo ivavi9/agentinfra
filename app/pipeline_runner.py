@@ -59,15 +59,38 @@ class PipelineRunner:
             return records
 
     def run_conformance(
-        self, entity_name: str, mappings: list, bucket: Optional[str] = None
+        self,
+        entity_name: str,
+        mappings: list,
+        bucket: Optional[str] = None,
+        tenant_id: Optional[str] = None,
     ) -> dict:
         """Ingests raw S3 assets, performs column transformations, and writes conformed tables to PostgreSQL."""
         if not bucket:
             bucket = self.discover_landing_bucket()
-        # 1. Download raw data
-        key = f"raw/{entity_name}/{entity_name}.json"
-        raw_records = self.download_s3_json(bucket, key)
+        # 1. Download raw data with tenant path partitioning fallback
+        prefix = f"{tenant_id}/raw/{entity_name}" if tenant_id else f"raw/{entity_name}"
+        key = f"{prefix}/{entity_name}.json"
+        try:
+            raw_records = self.download_s3_json(bucket, key)
+        except Exception:
+            # Fallback to default unpartitioned path
+            raw_records = self.download_s3_json(
+                bucket, f"raw/{entity_name}/{entity_name}.json"
+            )
+
         logger.info(f"Loaded {len(raw_records)} raw records for entity: {entity_name}")
+
+        bronze_table = (
+            f"bronze_{tenant_id}_{entity_name}"
+            if tenant_id
+            else f"bronze_{entity_name}"
+        )
+        silver_table = (
+            f"silver_{tenant_id}_{entity_name}"
+            if tenant_id
+            else f"silver_{entity_name}"
+        )
 
         # 2. Establish database connection
         with self._get_connection() as conn:
@@ -117,10 +140,11 @@ class PipelineRunner:
                     f"{col} {dtype}" for col, dtype in seen_cols.values()
                 ]
 
-                # Create Bronze (append-only), Silver (MERGE/upsert), and Quarantine tables
-                bronze_table = f"bronze_{entity_name}"
-                silver_table = f"silver_{entity_name}"
-                quarantine_table = f"quarantine_{entity_name}"
+                quarantine_table = (
+                    f"quarantine_{tenant_id}_{entity_name}"
+                    if tenant_id
+                    else f"quarantine_{entity_name}"
+                )
 
                 # Find primary surrogate key column for Silver MERGE upserts
                 pk_col = None

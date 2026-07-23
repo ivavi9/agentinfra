@@ -10,6 +10,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 from vault_client import VaultSecretsManager
+from tenant_governance import PIIRedactor, TenantIsolationManager
 from agent import LangGraphAgent
 from langchain_core.messages import HumanMessage, AIMessage
 
@@ -97,12 +98,21 @@ async def load_jwks(issuer_url: str):
         logger.error(f"Error loading JWKS keys: {e}")
 
 
-def verify_token(authorization: Optional[str] = Header(None)) -> str:
-    """Verifies incoming JWT Cognito token and extracts user_id (sub). Fail-closed by design."""
+class UserContext(BaseModel):
+    user_id: str
+    tenant_id: str
+
+
+def verify_token(
+    authorization: Optional[str] = Header(None),
+    x_tenant_id: Optional[str] = Header(None),
+) -> UserContext:
+    """Verifies incoming JWT Cognito token and extracts user_id and tenant_id. Fail-closed by design."""
     # Explicit env flag for local development testing only
     if os.getenv("DEV_BYPASS_AUTH", "").lower() == "true":
         logger.warning("DEV_BYPASS_AUTH enabled — returning dev_user")
-        return "dev_user"
+        t_id = x_tenant_id or "tenant-default"
+        return UserContext(user_id="dev_user", tenant_id=t_id)
 
     if not authorization:
         raise HTTPException(status_code=401, detail="Missing authorization header")
@@ -166,15 +176,22 @@ def verify_token(authorization: Optional[str] = Header(None)) -> str:
         sub = payload.get("sub")
         if not sub:
             raise HTTPException(status_code=401, detail="Token missing sub claim")
-        return sub
+
+        tenant_id = (
+            x_tenant_id
+            or payload.get("custom:tenant_id")
+            or payload.get("tenant_id")
+            or "tenant-default"
+        )
+        return UserContext(user_id=sub, tenant_id=tenant_id)
 
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token has expired")
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"JWT Verification failed: {e}")
-        raise HTTPException(status_code=401, detail=f"JWT invalid: {str(e)}")
+        logger.error(f"JWT Verification Exception: {e}")
+        raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}")
 
 
 @app.on_event("startup")
@@ -252,19 +269,46 @@ def get_runtime_config():
     }
 
 
+AUDIT_STORE: List[Dict[str, Any]] = []
+
+
+@app.get("/audit/logs")
+def get_audit_logs(user_ctx: UserContext = Depends(verify_token)):
+    """Returns immutable audit event log for the current tenant."""
+    logs = [log for log in AUDIT_STORE if log.get("tenant_id") == user_ctx.tenant_id]
+    return {"status": "SUCCESS", "tenant_id": user_ctx.tenant_id, "logs": logs}
+
+
 @app.post("/chat", response_model=ChatResponse)
-async def chat_endpoint(request: ChatRequest, user_id: str = Depends(verify_token)):
+async def chat_endpoint(
+    request: ChatRequest, user_ctx: UserContext = Depends(verify_token)
+):
     if agent_orchestrator is None:
         raise HTTPException(status_code=503, detail="Agent logic not initialized")
 
     try:
         session_id = request.session_id or "default"
-        thread_id = f"{user_id}:{session_id}"
+        thread_id = f"{user_ctx.tenant_id}:{user_ctx.user_id}:{session_id}"
+        sanitized_prompt = PIIRedactor.redact_text(request.prompt)
         logger.info(
-            f"Received prompt for user {user_id}, session {session_id} -> thread {thread_id}: '{request.prompt[:30]}...'"
+            f"Received prompt for tenant {user_ctx.tenant_id}, user {user_ctx.user_id}, session {session_id} -> thread {thread_id}"
         )
+
+        # Audit log record
+        AUDIT_STORE.append(
+            TenantIsolationManager.create_audit_entry(
+                tenant_id=user_ctx.tenant_id,
+                actor=user_ctx.user_id,
+                action="CHAT_RUN",
+                resource="/chat",
+                payload={
+                    "prompt_hash": TenantIsolationManager.compute_hash(sanitized_prompt)
+                },
+            )
+        )
+
         response_text, specialist_key = agent_orchestrator.run(
-            user_prompt=request.prompt, session_id=thread_id
+            user_prompt=sanitized_prompt, session_id=thread_id
         )
         return ChatResponse(response=response_text, specialist=specialist_key)
     except Exception as e:
@@ -274,31 +318,40 @@ async def chat_endpoint(request: ChatRequest, user_id: str = Depends(verify_toke
 
 @app.post("/chat/stream")
 async def chat_stream_endpoint(
-    request: ChatRequest, user_id: str = Depends(verify_token)
+    request: ChatRequest, user_ctx: UserContext = Depends(verify_token)
 ):
     if agent_orchestrator is None:
         raise HTTPException(status_code=503, detail="Agent logic not initialized")
 
     session_id = request.session_id or "default"
-    thread_id = f"{user_id}:{session_id}"
+    thread_id = f"{user_ctx.tenant_id}:{user_ctx.user_id}:{session_id}"
+    sanitized_prompt = PIIRedactor.redact_text(request.prompt)
     logger.info(
-        f"Received stream prompt for user {user_id}, session {session_id} -> thread {thread_id}: '{request.prompt[:30]}...'"
+        f"Received stream prompt for tenant {user_ctx.tenant_id}, user {user_ctx.user_id}, session {session_id} -> thread {thread_id}"
+    )
+
+    AUDIT_STORE.append(
+        TenantIsolationManager.create_audit_entry(
+            tenant_id=user_ctx.tenant_id,
+            actor=user_ctx.user_id,
+            action="CHAT_STREAM",
+            resource="/chat/stream",
+            payload={
+                "prompt_hash": TenantIsolationManager.compute_hash(sanitized_prompt)
+            },
+        )
     )
 
     async def sse_generator():
         try:
             async for event in agent_orchestrator.astream(
-                user_prompt=request.prompt, session_id=thread_id
+                user_prompt=sanitized_prompt, session_id=thread_id
             ):
                 yield f"data: {json.dumps(event)}\n\n"
 
-            # Check if graph has paused execution at an interrupt node
             config = {"configurable": {"thread_id": thread_id}}
             state = agent_orchestrator.graph.get_state(config)
             if state and state.next:
-                logger.info(
-                    f"Graph execution paused at interrupt node: {state.next}. Requiring user approval."
-                )
                 yield f"data: {json.dumps({'type': 'approval_required', 'next_nodes': list(state.next)})}\n\n"
         except Exception as e:
             logger.error(f"Error in stream generation: {str(e)}")
@@ -309,18 +362,27 @@ async def chat_stream_endpoint(
 
 @app.post("/chat/approve")
 async def chat_approve_endpoint(
-    request: ApproveRequest, user_id: str = Depends(verify_token)
+    request: ApproveRequest, user_ctx: UserContext = Depends(verify_token)
 ):
     if agent_orchestrator is None:
         raise HTTPException(status_code=503, detail="Agent logic not initialized")
 
-    thread_id = f"{user_id}:{request.session_id}"
+    thread_id = f"{user_ctx.tenant_id}:{user_ctx.user_id}:{request.session_id}"
     logger.info(
-        f"Received approval response for user {user_id}, session {request.session_id} -> action: {request.action}"
+        f"Received approval response for tenant {user_ctx.tenant_id}, user {user_ctx.user_id}, session {request.session_id} -> action: {request.action}"
+    )
+
+    AUDIT_STORE.append(
+        TenantIsolationManager.create_audit_entry(
+            tenant_id=user_ctx.tenant_id,
+            actor=user_ctx.user_id,
+            action=f"CHAT_APPROVE_{request.action.upper()}",
+            resource="/chat/approve",
+            payload={"session_id": request.session_id, "action": request.action},
+        )
     )
 
     if request.action == "reject":
-        # Cancel the pending run by updating state to end
         config = {"configurable": {"thread_id": thread_id}}
         agent_orchestrator.graph.update_state(config, None, as_node="__end__")
 
@@ -329,16 +391,13 @@ async def chat_approve_endpoint(
 
         return StreamingResponse(cancel_generator(), media_type="text/event-stream")
 
-    # If approved, resume the graph!
     async def sse_generator():
         try:
-            # Pass None as prompt to resume graph from interrupt
             async for event in agent_orchestrator.astream(
                 user_prompt=None, session_id=thread_id
             ):
                 yield f"data: {json.dumps(event)}\n\n"
 
-            # After resume, check if there are further interrupts
             config = {"configurable": {"thread_id": thread_id}}
             state = agent_orchestrator.graph.get_state(config)
             if state and state.next:
@@ -352,7 +411,7 @@ async def chat_approve_endpoint(
 
 @app.post("/pipeline/analyse")
 async def pipeline_analyse_endpoint(
-    request: PipelineAnalyseRequest, user_id: str = Depends(verify_token)
+    request: PipelineAnalyseRequest, user_ctx: UserContext = Depends(verify_token)
 ):
     if pipeline_orchestrator is None:
         raise HTTPException(
@@ -360,12 +419,21 @@ async def pipeline_analyse_endpoint(
         )
 
     session_id = request.session_id or "default"
-    thread_id = f"{user_id}:{session_id}"
+    thread_id = f"{user_ctx.tenant_id}:{user_ctx.user_id}:{session_id}"
     logger.info(
-        f"Received pipeline analysis request for user {user_id}, session {session_id}"
+        f"Received pipeline analysis request for tenant {user_ctx.tenant_id}, user {user_ctx.user_id}, session {session_id}"
     )
 
-    # Initialize state for this thread
+    AUDIT_STORE.append(
+        TenantIsolationManager.create_audit_entry(
+            tenant_id=user_ctx.tenant_id,
+            actor=user_ctx.user_id,
+            action="PIPELINE_ANALYSE",
+            resource="/pipeline/analyse",
+            payload={"session_id": session_id},
+        )
+    )
+
     config = {"configurable": {"thread_id": thread_id}}
     pipeline_orchestrator.graph.update_state(
         config,
@@ -382,10 +450,7 @@ async def pipeline_analyse_endpoint(
     )
 
     try:
-        # Run graph until the interrupt breakpoint (before dab_generator)
         result = pipeline_orchestrator.graph.invoke(None, config=config)
-
-        # Check if paused at dab_generator
         state = pipeline_orchestrator.graph.get_state(config)
         next_nodes = list(state.next) if state else []
 
@@ -409,20 +474,32 @@ async def pipeline_analyse_endpoint(
 
 @app.post("/pipeline/approve")
 async def pipeline_approve_endpoint(
-    request: PipelineApproveRequest, user_id: str = Depends(verify_token)
+    request: PipelineApproveRequest, user_ctx: UserContext = Depends(verify_token)
 ):
     if pipeline_orchestrator is None:
         raise HTTPException(
             status_code=503, detail="Pipeline agent logic not initialized"
         )
 
-    thread_id = f"{user_id}:{request.session_id}"
+    thread_id = f"{user_ctx.tenant_id}:{user_ctx.user_id}:{request.session_id}"
     config = {"configurable": {"thread_id": thread_id}}
     logger.info(
-        f"Received pipeline approval request for user {user_id}, session {request.session_id}"
+        f"Received pipeline approval request for tenant {user_ctx.tenant_id}, user {user_ctx.user_id}, session {request.session_id}"
     )
 
-    # Re-run PipelineValidator on the approved/hand-edited mapping matrix
+    AUDIT_STORE.append(
+        TenantIsolationManager.create_audit_entry(
+            tenant_id=user_ctx.tenant_id,
+            actor=user_ctx.user_id,
+            action="PIPELINE_APPROVE",
+            resource="/pipeline/approve",
+            payload={
+                "session_id": request.session_id,
+                "mapping_count": len(request.mapping_matrix),
+            },
+        )
+    )
+
     try:
         from validator import PipelineValidator
 
@@ -441,7 +518,6 @@ async def pipeline_approve_endpoint(
             status_code=400, detail=f"Mapping validation error: {val_err}"
         )
 
-    # Update target state mappings and set approved = True
     pipeline_orchestrator.graph.update_state(
         config,
         {
@@ -452,7 +528,6 @@ async def pipeline_approve_endpoint(
     )
 
     try:
-        # Resume graph execution (input None resumes from interrupt)
         result = pipeline_orchestrator.graph.invoke(None, config=config)
         return {
             "status": "success",
@@ -472,6 +547,7 @@ def _execute_async_pipeline_job(
     job_id: str,
     request: PipelineRunRequest,
     user_id: str,
+    tenant_id: str,
     mappings: list,
     db_config: dict,
 ):
@@ -486,6 +562,7 @@ def _execute_async_pipeline_job(
             entity_name=request.entity_name,
             mappings=mappings,
             bucket=request.bucket_name,
+            tenant_id=tenant_id,
         )
         JOBS_STORE[job_id]["status"] = "COMPLETED"
         JOBS_STORE[job_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
@@ -501,17 +578,16 @@ def _execute_async_pipeline_job(
 def run_pipeline(
     request: PipelineRunRequest,
     background_tasks: BackgroundTasks,
-    user_id: str = Depends(verify_token),
+    user_ctx: UserContext = Depends(verify_token),
 ):
     if pipeline_orchestrator is None:
         raise HTTPException(
-            status_code=503, detail="Pipeline agent logic not initialized"
+            status_code=530, detail="Pipeline agent logic not initialized"
         )
 
-    thread_id = f"{user_id}:{request.session_id}"
+    thread_id = f"{user_ctx.tenant_id}:{user_ctx.user_id}:{request.session_id}"
     config = {"configurable": {"thread_id": thread_id}}
 
-    # Retrieve conformed mappings from state checkpointer
     state = pipeline_orchestrator.graph.get_state(config)
     if not state or not state.values or "mapping_matrix" not in state.values:
         raise HTTPException(
@@ -530,16 +606,28 @@ def run_pipeline(
     JOBS_STORE[job_id] = {
         "job_id": job_id,
         "status": "QUEUED",
-        "user_id": user_id,
+        "user_id": user_ctx.user_id,
+        "tenant_id": user_ctx.tenant_id,
         "entity_name": request.entity_name,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
+
+    AUDIT_STORE.append(
+        TenantIsolationManager.create_audit_entry(
+            tenant_id=user_ctx.tenant_id,
+            actor=user_ctx.user_id,
+            action="PIPELINE_RUN_QUEUED",
+            resource=f"/pipeline/run/{job_id}",
+            payload={"job_id": job_id, "entity_name": request.entity_name},
+        )
+    )
 
     background_tasks.add_task(
         _execute_async_pipeline_job,
         job_id,
         request,
-        user_id,
+        user_ctx.user_id,
+        user_ctx.tenant_id,
         mappings,
         _vault_secrets,
     )
@@ -553,11 +641,16 @@ def run_pipeline(
 
 
 @app.get("/pipeline/status/{job_id}")
-def get_pipeline_job_status(job_id: str, user_id: str = Depends(verify_token)):
+def get_pipeline_job_status(job_id: str, user_ctx: UserContext = Depends(verify_token)):
     """Returns status and execution metrics for a background pipeline run job."""
     if job_id not in JOBS_STORE:
         raise HTTPException(status_code=404, detail=f"Job ID '{job_id}' not found")
-    return JOBS_STORE[job_id]
+    job = JOBS_STORE[job_id]
+    if job.get("tenant_id") and job["tenant_id"] != user_ctx.tenant_id:
+        raise HTTPException(
+            status_code=403, detail="Access denied: job belongs to another tenant"
+        )
+    return job
 
 
 @app.get("/metrics")
@@ -570,13 +663,17 @@ def metrics_endpoint():
 
 
 @app.get("/chat/history")
-def get_chat_history(session_id: str = "default", user_id: str = Depends(verify_token)):
+def get_chat_history(
+    session_id: str = "default", user_ctx: UserContext = Depends(verify_token)
+):
     if agent_orchestrator is None:
         raise HTTPException(status_code=503, detail="Agent logic not initialized")
 
     try:
-        thread_id = f"{user_id}:{session_id}"
-        logger.info(f"Retrieving stateful history for thread: {thread_id}")
+        thread_id = f"{user_ctx.tenant_id}:{user_ctx.user_id}:{session_id}"
+        logger.info(
+            f"Retrieving stateful history for tenant {user_ctx.tenant_id}, user {user_ctx.user_id}, thread: {thread_id}"
+        )
         config = {"configurable": {"thread_id": thread_id}}
         state = agent_orchestrator.graph.get_state(config)
 
