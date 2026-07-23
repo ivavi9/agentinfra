@@ -1,4 +1,3 @@
-import os
 import logging
 from typing import Dict, Any, Optional
 from contextlib import contextmanager
@@ -6,11 +5,39 @@ from contextlib import contextmanager
 logger = logging.getLogger("db_pool")
 
 try:
-    import psycopg2
-    from psycopg2 import pool
+    from psycopg_pool import ConnectionPool
 except ImportError:
-    psycopg2 = None
-    pool = None
+    ConnectionPool = None  # type: ignore
+
+_SHARED_POSTGRES_POOL: Any = None
+
+
+def get_shared_postgres_pool(db_config: Dict[str, Any], max_size: int = 10) -> Any:
+    """
+    Returns a shared, consolidated singleton ConnectionPool instance.
+    Prevents connection exhaustion across multiple agent graphs under HPA scale-out.
+    """
+    global _SHARED_POSTGRES_POOL
+
+    if _SHARED_POSTGRES_POOL is not None:
+        return _SHARED_POSTGRES_POOL
+
+    if ConnectionPool is None:
+        logger.warning("psycopg_pool.ConnectionPool unavailable.")
+        return None
+
+    try:
+        db_url = f"postgresql://{db_config['db_user']}:{db_config['db_password']}@{db_config['db_host']}:{db_config.get('db_port', 5432)}/{db_config['db_name']}"
+        logger.info(
+            f"Initializing consolidated singleton ConnectionPool (max_size={max_size})..."
+        )
+        _SHARED_POSTGRES_POOL = ConnectionPool(
+            conninfo=db_url, max_size=max_size, open=True
+        )
+        return _SHARED_POSTGRES_POOL
+    except Exception as e:
+        logger.error(f"Failed to initialize consolidated ConnectionPool: {e}")
+        return None
 
 
 class DatabasePoolSingleton:
@@ -35,24 +62,8 @@ class DatabasePoolSingleton:
         if self._pool is not None:
             return
 
-        if not psycopg2 or not pool:
-            logger.warning(
-                "psycopg2 not installed — running with mock database pool fallback."
-            )
-            return
-
         try:
-            self._pool = pool.ThreadedConnectionPool(
-                minconn=minconn,
-                maxconn=maxconn,
-                host=db_config.get("host", os.getenv("POSTGRES_HOST", "localhost")),
-                port=int(db_config.get("port", os.getenv("POSTGRES_PORT", 5432))),
-                dbname=db_config.get("dbname", os.getenv("POSTGRES_DB", "agentinfra")),
-                user=db_config.get("user", os.getenv("POSTGRES_USER", "postgres")),
-                password=db_config.get(
-                    "password", os.getenv("POSTGRES_PASSWORD", "postgres")
-                ),
-            )
+            self._pool = get_shared_postgres_pool(db_config, max_size=maxconn)
             logger.info(
                 f"Database connection pool initialized (min={minconn}, max={maxconn})."
             )
@@ -65,7 +76,7 @@ class DatabasePoolSingleton:
         """Context manager for acquiring and releasing pool connections."""
         if not self._pool:
             raise RuntimeError(
-                "Database connection pool is uninitialized or psycopg2 is unavailable."
+                "Database connection pool is uninitialized or psycopg_pool is unavailable."
             )
         conn = self._pool.getconn()
         try:
@@ -76,7 +87,8 @@ class DatabasePoolSingleton:
     def close_all(self) -> None:
         """Closes all open connections in pool on shutdown."""
         if self._pool:
-            self._pool.closeall()
+            if hasattr(self._pool, "close"):
+                self._pool.close()
             self._pool = None
             logger.info("Database connection pool closed.")
 

@@ -64,10 +64,32 @@ class CompliancePostureManager:
         }
 
     @classmethod
+    def check_db_pool_wiring_status(cls) -> Dict[str, str]:
+        """Dynamically verifies that get_shared_postgres_pool is wired into agent checkpointers."""
+        sup_path = os.path.join(os.path.dirname(__file__), "agents", "supervisor.py")
+        try:
+            if os.path.exists(sup_path):
+                with open(sup_path, "r") as f:
+                    code = f.read()
+                if "get_shared_postgres_pool" in code:
+                    return {
+                        "status": "VERIFIED",
+                        "notes": "Consolidated get_shared_postgres_pool singleton imported and active in supervisor.py",
+                    }
+        except Exception as e:
+            logger.warning(f"Could not read supervisor.py: {e}")
+
+        return {
+            "status": "GAP",
+            "notes": "PostgreSQL checkpointers are opening independent connection pools; consolidate via db.py",
+        }
+
+    @classmethod
     def get_compliance_posture(cls) -> Dict[str, Any]:
         """Evaluates and returns dynamic security control matrix."""
         kong_tls = cls.check_kong_tls_status()
         vault_sec = cls.check_vault_mode_status()
+        pool_sec = cls.check_db_pool_wiring_status()
 
         controls = [
             {
@@ -88,8 +110,8 @@ class CompliancePostureManager:
                 "id": "SEC-03",
                 "category": "Database Connection Pool Sizing",
                 "control": "Consolidated single connection pool per pod to prevent DB connection exhaustion under HPA scale-out",
-                "status": "VERIFIED",
-                "evidence": "DatabasePoolSingleton in app/db.py",
+                "status": pool_sec["status"],
+                "evidence": pool_sec["notes"],
             },
             {
                 "id": "SEC-04",

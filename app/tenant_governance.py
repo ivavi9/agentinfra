@@ -136,6 +136,7 @@ class TenantIsolationManager:
                 f"ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS tenant_id VARCHAR(64);"
             )
             cur.execute(f"ALTER TABLE {table_name} ENABLE ROW LEVEL SECURITY;")
+            cur.execute(f"ALTER TABLE {table_name} FORCE ROW LEVEL SECURITY;")
             cur.execute(
                 f"DROP POLICY IF EXISTS tenant_isolation_policy ON {table_name};"
             )

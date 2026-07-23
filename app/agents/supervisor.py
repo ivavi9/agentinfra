@@ -7,7 +7,6 @@ from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, System
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.checkpoint.postgres import PostgresSaver
-from psycopg_pool import ConnectionPool
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 
@@ -20,6 +19,7 @@ from .silver_model_agent import SilverModelAgent
 from .stm_mapping_agent import STMMappingAgent
 from .dab_generator_agent import DABGeneratorAgent
 from model_router import ModelRouter
+from db import get_shared_postgres_pool
 
 logger = logging.getLogger("supervisor")
 
@@ -124,16 +124,18 @@ class SupervisorAgent:
         self.memory: Any = None
         if db_config and db_config.get("db_host"):
             try:
-                db_url = f"postgresql://{db_config['db_user']}:{db_config['db_password']}@{db_config['db_host']}:{db_config['db_port']}/{db_config['db_name']}"
                 logger.info(
-                    f"Connecting to Postgres checkpointer: host={db_config['db_host']}, user={db_config['db_user']}"
+                    f"Connecting to consolidated Postgres checkpointer pool: host={db_config['db_host']}"
                 )
-                self.pool = ConnectionPool(conninfo=db_url, max_size=10, open=True)
-                self.memory = PostgresSaver(self.pool)  # type: ignore
-                self.memory.setup()
-                logger.info(
-                    "SupervisorAgent successfully compiled with PostgresSaver checkpointer"
-                )
+                self.pool = get_shared_postgres_pool(db_config, max_size=10)
+                if self.pool:
+                    self.memory = PostgresSaver(self.pool)  # type: ignore
+                    self.memory.setup()
+                    logger.info(
+                        "SupervisorAgent successfully compiled with PostgresSaver checkpointer"
+                    )
+                else:
+                    self.memory = MemorySaver()
             except Exception as e:
                 logger.error(
                     f"Failed to initialize PostgresSaver checkpointer: {e}. Falling back to MemorySaver."
@@ -335,10 +337,12 @@ class DatabricksPipelineGraph:
         self.memory: Any = None
         if db_config and db_config.get("db_host"):
             try:
-                db_url = f"postgresql://{db_config['db_user']}:{db_config['db_password']}@{db_config['db_host']}:{db_config['db_port']}/{db_config['db_name']}"
-                self.pool = ConnectionPool(conninfo=db_url, max_size=10, open=True)
-                self.memory = PostgresSaver(self.pool)  # type: ignore
-                self.memory.setup()
+                self.pool = get_shared_postgres_pool(db_config, max_size=10)
+                if self.pool:
+                    self.memory = PostgresSaver(self.pool)  # type: ignore
+                    self.memory.setup()
+                else:
+                    self.memory = MemorySaver()
             except Exception as e:
                 logger.error(
                     f"Pipeline PostgresSaver failed: {e}. Falling back to MemorySaver."

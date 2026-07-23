@@ -102,9 +102,10 @@ def test_rls_ddl_and_tenant_session_execution():
 
     cur = DummyCursor()
     TenantIsolationManager.enable_table_rls(cur, "silver_tenant_alpha_transaction")
-    assert len(cur.executed) == 4
+    assert len(cur.executed) == 5
     assert "ENABLE ROW LEVEL SECURITY" in cur.executed[1][0]
-    assert "CREATE POLICY tenant_isolation_policy" in cur.executed[3][0]
+    assert "FORCE ROW LEVEL SECURITY" in cur.executed[2][0]
+    assert "CREATE POLICY tenant_isolation_policy" in cur.executed[4][0]
 
     cur_session = DummyCursor()
     TenantIsolationManager.set_tenant_session(cur_session, "tenant-finance")
