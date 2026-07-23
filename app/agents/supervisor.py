@@ -129,8 +129,11 @@ class SupervisorAgent:
                 )
                 self.pool = get_shared_postgres_pool(db_config, max_size=10)
                 if self.pool:
+                    with self.pool.connection() as conn:
+                        conn.autocommit = True
+                        self.memory = PostgresSaver(conn)  # type: ignore
+                        self.memory.setup()
                     self.memory = PostgresSaver(self.pool)  # type: ignore
-                    self.memory.setup()
                     logger.info(
                         "SupervisorAgent successfully compiled with PostgresSaver checkpointer"
                     )
@@ -339,8 +342,11 @@ class DatabricksPipelineGraph:
             try:
                 self.pool = get_shared_postgres_pool(db_config, max_size=10)
                 if self.pool:
+                    with self.pool.connection() as conn:
+                        conn.autocommit = True
+                        self.memory = PostgresSaver(conn)  # type: ignore
+                        self.memory.setup()
                     self.memory = PostgresSaver(self.pool)  # type: ignore
-                    self.memory.setup()
                 else:
                     self.memory = MemorySaver()
             except Exception as e:

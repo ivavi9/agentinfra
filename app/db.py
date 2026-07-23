@@ -31,9 +31,14 @@ def get_shared_postgres_pool(db_config: Dict[str, Any], max_size: int = 10) -> A
         logger.info(
             f"Initializing consolidated singleton ConnectionPool (max_size={max_size})..."
         )
-        _SHARED_POSTGRES_POOL = ConnectionPool(
-            conninfo=db_url, max_size=max_size, open=True
+        pool = ConnectionPool(
+            conninfo=db_url,
+            max_size=max_size,
+            open=True,
+            timeout=3.0,
+            kwargs={"connect_timeout": 3},
         )
+        _SHARED_POSTGRES_POOL = pool
         return _SHARED_POSTGRES_POOL
     except Exception as e:
         logger.error(f"Failed to initialize consolidated ConnectionPool: {e}")
