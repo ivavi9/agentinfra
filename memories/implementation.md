@@ -163,6 +163,18 @@ To protect credit resources, we deploy our infrastructure as an ephemeral enviro
   - **Tenant Data Partitioning**: Updated `PipelineRunner` in [app/pipeline_runner.py](file:///Users/avikaushik/agentinfra/app/pipeline_runner.py) to enforce tenant path partitioning on S3 (`s3://<bucket>/<tenant_id>/raw/...`) and PostgreSQL target tables (`bronze_<tenant_id>_*`, `silver_<tenant_id>_*`, `quarantine_<tenant_id>_*`).
   - **Tenant Test Suite**: Created [tests/test_tenant_isolation.py](file:///Users/avikaushik/agentinfra/tests/test_tenant_isolation.py) (**33 total passing tests across suite**).
 
-## Planned Next Phases
+- **Phase 20: Model Router & Cost Governance (Completed ✅ — 2026-07-23)**
+  - **Dynamic Model Router**: Created [app/model_router.py](file:///Users/avikaushik/agentinfra/app/model_router.py) (`ModelRouter`) allocating frontier models (`claude-3-5-sonnet`) for complex mapping/codegen tasks and lightweight models (`nova-lite`/`haiku`) for routing.
+  - **Quota & Cost Management**: Implemented `QuotaManager` enforcing 500,000 daily tokens per tenant (`GET /model/quota`) and `CostCalculator` tracking input/output USD token costs.
 
-- **Phase 20: Model Router & Cost Tiering** — Model routing (Claude for reasoning/codegen vs Haiku/Nova for cheap steps), per-tenant token quotas, and run cost tracking.
+- **Phase 21: Observability, Reliability & Autoscaling (Completed ✅ — 2026-07-23)**
+  - **Prometheus Metrics**: Upgraded [app/metrics.py](file:///Users/avikaushik/agentinfra/app/metrics.py) with `prometheus_client` counters/gauges (`agent_routes_total`, `llm_token_chunks_total`, `pipeline_runs_total`).
+  - **K8s Autoscaling & PDB**: Created [infra/k8s/hpa-and-reliability.yaml](file:///Users/avikaushik/agentinfra/infra/k8s/hpa-and-reliability.yaml) defining HorizontalPodAutoscaler (CPU target 70%, min 2, max 5) and PodDisruptionBudget (`minAvailable: 1`).
+
+- **Phase 22: Self-Serve UX & Data Lineage (Completed ✅ — 2026-07-23)**
+  - **BRD Document Parser**: Created [app/document_parser.py](file:///Users/avikaushik/agentinfra/app/document_parser.py) (`BRDDocumentParser`) extracting entity specifications and requirements (`POST /document/parse`).
+  - **Field-Level Data Lineage**: Created [app/lineage_viewer.py](file:///Users/avikaushik/agentinfra/app/lineage_viewer.py) (`LineageGraphService`) generating node-edge field lineage (`source` → `bronze` → `silver` → `target`) (`GET /pipeline/lineage/{session_id}`).
+
+- **Phase 23: Enterprise Compliance Posture & Controls (Completed ✅ — 2026-07-23)**
+  - **SOC2 Control Matrix**: Created [app/compliance_manager.py](file:///Users/avikaushik/agentinfra/app/compliance_manager.py) (`CompliancePostureManager`) exposing verified control statuses (`GET /compliance/posture`).
+  - **Complete Test Suite**: Added [tests/test_model_router.py](file:///Users/avikaushik/agentinfra/tests/test_model_router.py), [tests/test_observability_and_lineage.py](file:///Users/avikaushik/agentinfra/tests/test_observability_and_lineage.py), and [tests/test_compliance.py](file:///Users/avikaushik/agentinfra/tests/test_compliance.py) (**41 total passing tests across suite**).

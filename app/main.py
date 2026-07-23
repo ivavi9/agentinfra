@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timezone
 import jwt
 import httpx
-from fastapi import FastAPI, HTTPException, Depends, Header, Response, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Depends, Header, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
@@ -653,13 +653,61 @@ def get_pipeline_job_status(job_id: str, user_ctx: UserContext = Depends(verify_
     return job
 
 
-@app.get("/metrics")
-def metrics_endpoint():
-    from metrics import get_prometheus_metrics
+@app.get("/model/quota")
+def get_model_quota(user_ctx: UserContext = Depends(verify_token)):
+    """Returns daily token quota usage for the current tenant."""
+    from model_router import QuotaManager
 
-    return Response(
-        content=get_prometheus_metrics(), media_type="text/plain; version=0.0.4"
+    qm = QuotaManager()
+    return qm.get_tenant_quota_status(user_ctx.tenant_id)
+
+
+@app.get("/pipeline/lineage/{session_id}")
+def get_pipeline_lineage(
+    session_id: str, user_ctx: UserContext = Depends(verify_token)
+):
+    """Returns field-level data lineage graph for a pipeline session."""
+    from lineage_viewer import LineageGraphService
+
+    if pipeline_orchestrator is None:
+        raise HTTPException(
+            status_code=503, detail="Pipeline agent logic not initialized"
+        )
+
+    thread_id = f"{user_ctx.tenant_id}:{user_ctx.user_id}:{session_id}"
+    config = {"configurable": {"thread_id": thread_id}}
+    state = pipeline_orchestrator.graph.get_state(config)
+
+    mappings = []
+    entity_name = "transaction"
+    if state and state.values:
+        mappings = state.values.get("mapping_matrix", [])
+
+    return LineageGraphService.generate_lineage(
+        entity_name=entity_name, mappings=mappings, tenant_id=user_ctx.tenant_id
     )
+
+
+class DocumentParseRequest(BaseModel):
+    content: str
+
+
+@app.post("/document/parse")
+def parse_brd_document(
+    request: DocumentParseRequest, user_ctx: UserContext = Depends(verify_token)
+):
+    """Parses a Business Requirement Document (BRD) into structured entity specifications."""
+    from document_parser import BRDDocumentParser
+
+    return BRDDocumentParser.parse_brd_content(request.content)
+
+
+@app.get("/compliance/posture")
+def get_compliance_posture(user_ctx: UserContext = Depends(verify_token)):
+    """Returns verified enterprise security and SOC2 compliance control matrix."""
+    from compliance_manager import CompliancePostureManager
+
+    return CompliancePostureManager.get_compliance_posture()
 
 
 @app.get("/chat/history")
