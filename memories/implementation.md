@@ -25,7 +25,7 @@ See full design spec in [poc_architecture.md](file:///Users/avikaushik/agentinfr
 ## Infrastructure Execution Mode: Ephemeral Sessions
 To protect credit resources, we deploy our infrastructure as an ephemeral environment:
 - **`make bootstrap`**: Deploys VPC, EKS Cluster, Kong, Vault, Postgres, and LangGraph Core.
-- **`make teardown`**: Destroys all AWS resources completely.
+- **`make teardown`**: Destroys all AWS resources completely (`pre-teardown` → `purge-orphans` → `terraform destroy` → `clean`).
 
 ## Phase Breakdown
 
@@ -161,7 +161,8 @@ To protect credit resources, we deploy our infrastructure as an ephemeral enviro
   - **Pre-Prompt PII Redaction**: Created `PIIRedactor` in [app/tenant_governance.py](file:///Users/avikaushik/agentinfra/app/tenant_governance.py) automatically sanitizing SSN, credit cards, emails, and phone numbers before sending prompts/payloads to external LLMs.
   - **Immutable Audit Event Logging**: Created `TenantIsolationManager` in [app/tenant_governance.py](file:///Users/avikaushik/agentinfra/app/tenant_governance.py) recording immutable audit entries (`audit_id`, `tenant_id`, `actor`, `action`, `resource`, `input_hash`, `timestamp`) and exposed `GET /audit/logs` endpoint in [app/main.py](file:///Users/avikaushik/agentinfra/app/main.py).
   - **Tenant Data Partitioning**: Updated `PipelineRunner` in [app/pipeline_runner.py](file:///Users/avikaushik/agentinfra/app/pipeline_runner.py) to enforce tenant path partitioning on S3 (`s3://<bucket>/<tenant_id>/raw/...`) and PostgreSQL target tables (`bronze_<tenant_id>_*`, `silver_<tenant_id>_*`, `quarantine_<tenant_id>_*`).
-  - **Tenant Test Suite**: Created [tests/test_tenant_isolation.py](file:///Users/avikaushik/agentinfra/tests/test_tenant_isolation.py) (**33 total passing tests across suite**).
+  - **Tenant RLS Enforcement**: Enforced `ENABLE ROW LEVEL SECURITY` and `FORCE ROW LEVEL SECURITY` in [app/tenant_governance.py](file:///Users/avikaushik/agentinfra/app/tenant_governance.py) so tenant policies apply strictly even for database owner connections.
+  - **Tenant Test Suite**: Created [tests/test_tenant_isolation.py](file:///Users/avikaushik/agentinfra/tests/test_tenant_isolation.py) (**42 total passing tests across suite**).
 
 - **Phase 20: Model Router & Cost Governance (Completed ✅ — 2026-07-23)**
   - **Dynamic Model Router**: Created [app/model_router.py](file:///Users/avikaushik/agentinfra/app/model_router.py) (`ModelRouter`) allocating frontier models (`claude-3-5-sonnet`) for complex mapping/codegen tasks and lightweight models (`nova-lite`/`haiku`) for routing.
@@ -177,4 +178,5 @@ To protect credit resources, we deploy our infrastructure as an ephemeral enviro
 
 - **Phase 23: Enterprise Compliance Posture & Controls (Completed ✅ — 2026-07-23)**
   - **SOC2 Control Matrix**: Created [app/compliance_manager.py](file:///Users/avikaushik/agentinfra/app/compliance_manager.py) (`CompliancePostureManager`) exposing verified control statuses (`GET /compliance/posture`).
-  - **Complete Test Suite**: Added [tests/test_model_router.py](file:///Users/avikaushik/agentinfra/tests/test_model_router.py), [tests/test_observability_and_lineage.py](file:///Users/avikaushik/agentinfra/tests/test_observability_and_lineage.py), and [tests/test_compliance.py](file:///Users/avikaushik/agentinfra/tests/test_compliance.py) (**41 total passing tests across suite**).
+  - **Consolidated DB Pool Singleton**: Added `get_shared_postgres_pool()` in [app/db.py](file:///Users/avikaushik/agentinfra/app/db.py) and wired into `supervisor.py` checkpointers.
+  - **Complete Test Suite**: Added [tests/test_model_router.py](file:///Users/avikaushik/agentinfra/tests/test_model_router.py), [tests/test_observability_and_lineage.py](file:///Users/avikaushik/agentinfra/tests/test_observability_and_lineage.py), and [tests/test_compliance.py](file:///Users/avikaushik/agentinfra/tests/test_compliance.py) (**42 total passing tests across suite**).
